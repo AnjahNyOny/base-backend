@@ -34,4 +34,6 @@ Thumbs.db
 *.swp
 
 # === Uploads / Fichiers dynamiques ===
-uploads/
+uploads/*
+!uploads/.gitkeep
+
