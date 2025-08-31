@@ -1,5 +1,5 @@
 import jwt from "jsonwebtoken";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import db from "../config/db.js"; // Importez votre gestionnaire de base de données
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev_secret_change_me";
