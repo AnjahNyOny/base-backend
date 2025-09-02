@@ -1,3 +1,4 @@
+
 // // workers/imapIngest.js
 // import 'dotenv/config';
 // import { ImapFlow } from 'imapflow';
@@ -6,7 +7,7 @@
 // import fs from 'fs';
 // import path from 'path';
 // import crypto from 'crypto';
-// import fetch from 'node-fetch'; // NEW: HTTP call vers l'API (si Node < 18)
+// import fetch from 'node-fetch'; // HTTP call vers l'API (Node < 18)
 
 // /* =========================
 //    Constantes & helpers
@@ -28,39 +29,56 @@
 // const GMAIL_RAW = process.env.IMAP_GMAIL_RAW;
 
 // /* =========================
-//    Notif webhook -> SSE serveur API
+//    Notif webhook -> Socket.IO du serveur API
 //    ========================= */
-// // const NOTIFY_URL = process.env.NOTIFY_URL || 'http://localhost:5001/api/hooks/imap-ingest'; // NEW
-// // const NOTIFY_SECRET = process.env.NOTIFY_SECRET || ''; // NEW
-// // en haut de workers/imapIngest.js
-// // workers/imapIngest.js
 // const NOTIFY_URL =
-//   process.env.NOTIFY_URL ||
-//   process.env.INTERNAL_NOTIFY_URL || "http://localhost:5001/api/inbound/notify";
+//   (process.env.NOTIFY_URL || process.env.INTERNAL_NOTIFY_URL || 'http://localhost:5001/inbound/notify').trim();
 
 // const NOTIFY_SECRET =
-//   process.env.INTERNAL_NOTIFY_SECRET ||
-//   process.env.NOTIFY_SECRET || "";
+//   (process.env.INTERNAL_NOTIFY_SECRET || process.env.NOTIFY_SECRET || '').trim();
 
-// async function notify(event, data) { // NEW
-//   if (!NOTIFY_URL || !NOTIFY_SECRET) return;
+// // Logs de boot pour diagnostic
+// console.log('[imapIngest] boot', {
+//   INTERNAL_NOTIFY_URL: process.env.INTERNAL_NOTIFY_URL,
+//   NOTIFY_URL,
+//   SECRET_LEN: (NOTIFY_SECRET || '').length,
+//   NODE_ENV: process.env.NODE_ENV,
+// });
+
+// // Helper notify bavard (format event + data)
+// async function notify(event, data) {
+//   if (!NOTIFY_URL || !NOTIFY_SECRET) {
+//     console.warn('[imapIngest] notify skipped (missing NOTIFY_URL or NOTIFY_SECRET)');
+//     return false;
+//   }
+
+//   console.log('[imapIngest] notify →', {
+//     url: NOTIFY_URL,
+//     event,
+//     secret_len: (NOTIFY_SECRET || '').length,
+//   });
+
 //   let lastErr;
 //   for (let i = 1; i <= 2; i++) {
 //     try {
+//       const body = { event, data };
 //       const res = await fetch(NOTIFY_URL, {
 //         method: 'POST',
 //         headers: {
 //           'content-type': 'application/json',
 //           'x-internal-secret': NOTIFY_SECRET,
 //         },
-//         body: JSON.stringify({ event, data }),
+//         body: JSON.stringify(body),
 //       });
+
+//       const text = await res.text().catch(() => '');
+//       console.log(`[imapIngest] notify attempt ${i}: HTTP ${res.status} body=`, text);
+
 //       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 //       return true;
 //     } catch (e) {
 //       lastErr = e;
-//       if (i === 2) break;
-//       await new Promise(r => setTimeout(r, 500));
+//       if (i < 2) await new Promise((r) => setTimeout(r, 500));
 //     }
 //   }
 //   console.warn('[imapIngest] notify failed:', lastErr?.message || lastErr);
@@ -99,7 +117,6 @@
 // /* =========================
 //    Persistance en BDD (+ idempotence)
 //    ========================= */
-
 // async function upsertInbound({
 //   threadId,
 //   fromName,
@@ -210,7 +227,6 @@
 // /* =========================
 //    Téléchargement RAW robuste (hors lock)
 //    ========================= */
-
 // async function collectStreamToBuffer(stream) {
 //   const chunks = [];
 //   await new Promise((res, rej) => {
@@ -271,7 +287,6 @@
 // /* =========================
 //    Ingestion IMAP (runOnce)
 //    ========================= */
-
 // async function runOnce() {
 //   const client = new ImapFlow({
 //     host: process.env.IMAP_HOST || 'imap.gmail.com',
@@ -299,8 +314,23 @@
 
 //       if (!seqs || seqs.length === 0) {
 //         console.log('ℹ️ Aucun message à ingérer.');
+
+//         // DEV ONLY : petit ping pour vérifier la chaîne
+//         if (process.env.NODE_ENV !== 'production') {
+//           await notify('message.ingested', {
+//             type: 'insert',
+//             source: 'imap-worker',
+//             threadId: 999,
+//             subject: 'Ping worker (dev)',
+//             from: { name: 'Worker Test', email: 'worker@test.local' },
+//             preview: 'Chaîne notify → backend → socket → front OK ✅',
+//             at: new Date().toISOString(),
+//           });
+//         }
+
 //         return;
 //       }
+
 //       console.log(`🔎 ${seqs.length} message(s) à ingérer…`);
 
 //       for await (const msg of client.fetch(seqs, {
@@ -375,10 +405,7 @@
 
 //         const messageId = norm(mail.messageId);
 
-//         const meta = await client.fetchOne(uid, {
-//           uid: true,
-//           source: false
-//         });
+//         const meta = await client.fetchOne(uid, { uid: true, source: false });
 //         const gmailMsgId = meta?.xGMMsgID ?? null;
 //         const gmailThrId = meta?.xGMThreadID ?? null;
 
@@ -410,18 +437,21 @@
 
 //         await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
 
-//         // NEW: webhook -> SSE
+//         // Payload enrichi et cohérent avec le front
 //         const payload = {
 //           type: res.skipped ? 'dedupe' : 'insert',
+//           source: 'imap-worker',
 //           threadId,
 //           subject,
 //           from: { name: fromName, email: fromEmail },
+//           messageId,
 //           uid,
 //           gmailMsgId,
 //           gmailThrId,
-//           at: Date.now(),
+//           at: new Date().toISOString(),
 //           preview: (text || '').slice(0, 200),
 //         };
+//         console.log("[imapIngest] ABOUT TO NOTIFY payload =", JSON.stringify(payload));
 //         await notify('message.ingested', payload);
 
 //         if (res.skipped) {
@@ -447,7 +477,6 @@
 // /* =========================
 //    Boucle
 //    ========================= */
-
 // async function loop() {
 //   while (true) {
 //     try {
@@ -462,7 +491,7 @@
 // if (process.env.NODE_ENV === 'production') {
 //   loop();
 // } else {
-//   // En dev: un seul passage
+//   // En dev: un seul passage (avec ping s’il n’y a rien à ingérer)
 //   runOnce()
 //     .then(() => {
 //       console.log('✅ Ingest pass terminé.');
@@ -474,8 +503,6 @@
 //     });
 // }
 
-// workers/imapIngest.js
-// workers/imapIngest.js
 import 'dotenv/config';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
@@ -565,7 +592,8 @@ async function notify(event, data) {
    Extraction du threadId
    ========================= */
 
-// 1) depuis adresse du type ...+hs-thread-21@...
+// (hérité) 1) depuis adresse du type ...+hs-thread-21@...
+// On garde la fonction pour compatibilité, mais on ne s’appuie plus dessus.
 function findThreadIdFromPlus(addresses = []) {
   const re = /\+hs-thread-(\d+)\@/i;
   for (const a of addresses) {
@@ -576,7 +604,7 @@ function findThreadIdFromPlus(addresses = []) {
   return null;
 }
 
-// 2) depuis headers: X-Thread-ID ou In-Reply-To / References
+// 2) depuis headers: X-Thread-ID (uniquement)
 function findThreadIdFromHeaders(headers) {
   const h = (k) => headers?.get?.(k) || headers?.[k];
   const x = h('x-thread-id');
@@ -584,11 +612,60 @@ function findThreadIdFromHeaders(headers) {
     const n = Number(String(x).trim());
     if (Number.isFinite(n)) return n;
   }
-  const inrep = h('in-reply-to') || '';
-  const m = String(inrep).match(/hs-thread-(\d+)/i);
-  if (m) return Number(m[1]);
+  // Ancienne tentative via In-Reply-To contenant "hs-thread-<id>" — abandonnée.
   return null;
 }
+
+/* =========================
+   Résolution via Message-ID (In-Reply-To / References)
+   ========================= */
+function normalizeMsgId(v) {
+  if (!v) return null;
+  const s = String(v).trim();
+  // on garde tel quel + version sans chevrons
+  return s;
+}
+
+function variants(id) {
+  if (!id) return [];
+  const raw = String(id).trim();
+  const noAngles = raw.replace(/^<+/, '').replace(/>+$/, '');
+  const withAngles = `<${noAngles}>`;
+  return Array.from(new Set([raw, noAngles, withAngles]));
+}
+
+async function resolveThreadIdByMsgIds({ inReplyTo, references }) {
+  const candidates = new Set();
+
+  const pushIds = (val) => {
+    if (!val) return;
+    if (Array.isArray(val)) {
+      for (const x of val) variants(normalizeMsgId(x)).forEach((v) => candidates.add(v));
+    } else {
+      // parfois refs est une string avec plusieurs IDs séparés par espaces
+      const parts = String(val).split(/\s+/).map(s => s.replace(/[,;]/g, ''));
+      for (const p of parts) variants(normalizeMsgId(p)).forEach((v) => candidates.add(v));
+    }
+  };
+
+  pushIds(inReplyTo);
+  pushIds(references);
+
+  const ids = Array.from(candidates).filter(Boolean);
+  if (!ids.length) return null;
+
+  const placeholders = ids.map(() => '?').join(',');
+  const [rows] = await db.query(
+    `SELECT thread_id
+       FROM email_outbox
+      WHERE provider_message_id IN (${placeholders})
+      ORDER BY id DESC
+      LIMIT 1`,
+    ids
+  );
+  return rows?.[0]?.thread_id || null;
+}
+
 
 /* =========================
    Persistance en BDD (+ idempotence)
@@ -785,24 +862,26 @@ async function runOnce() {
       if (GMAIL_RAW) {
         seqs = await client.search({ gmailRaw: GMAIL_RAW });
       } else {
-        seqs = await client.search({ seen: false, since });
+        // on n’exclut plus les mails déjà “vus”
+        seqs = await client.search({ since });
       }
+
 
       if (!seqs || seqs.length === 0) {
         console.log('ℹ️ Aucun message à ingérer.');
 
         // DEV ONLY : petit ping pour vérifier la chaîne
-        if (process.env.NODE_ENV !== 'production') {
-          await notify('message.ingested', {
-            type: 'insert',
-            source: 'imap-worker',
-            threadId: 999,
-            subject: 'Ping worker (dev)',
-            from: { name: 'Worker Test', email: 'worker@test.local' },
-            preview: 'Chaîne notify → backend → socket → front OK ✅',
-            at: new Date().toISOString(),
-          });
-        }
+        // if (process.env.NODE_ENV !== 'production') {
+        //   await notify('message.ingested', {
+        //     type: 'insert',
+        //     source: 'imap-worker',
+        //     threadId: 999,
+        //     subject: 'Ping worker (dev)',
+        //     from: { name: 'Worker Test', email: 'worker@test.local' },
+        //     preview: 'Chaîne notify → backend → socket → front OK ✅',
+        //     at: new Date().toISOString(),
+        //   });
+        // }
 
         return;
       }
@@ -840,13 +919,11 @@ async function runOnce() {
           pushAddr(msg.envelope?.to || []);
           pushAddr(msg.envelope?.cc || []);
           pushAddr(msg.envelope?.bcc || []);
-          if (!threadId) threadId = findThreadIdFromPlus(toAll);
 
-          if (!threadId) {
-            console.log(`(skip) pas de threadId pour seq=${msg.seq}`);
-            continue;
-          }
+          // Ancien fallback via plus addressing (désactivé chez IONOS) — on ne s'y fie plus.
+          // if (!threadId) threadId = findThreadIdFromPlus(toAll);
 
+          // On ne skip plus ici : on tentera de résoudre après parsing via In-Reply-To/References.
           targets.push({
             uid: msg.uid,
             subject,
@@ -864,7 +941,7 @@ async function runOnce() {
 
     // 3) Télécharger + parser + BDD + notify
     for (const t of targets) {
-      const { uid, subject, threadId, headers } = t;
+      const { uid, subject, threadId: tThreadId, headers } = t;
 
       try {
         console.log(`   ⤷ récupération RAW (uid=${uid})…`);
@@ -880,6 +957,8 @@ async function runOnce() {
         const html = mail.html || null;
 
         const messageId = norm(mail.messageId);
+        const inReplyTo = mail.inReplyTo || (headers?.get && headers.get('in-reply-to')) || null;
+        const references = mail.references || (headers?.get && headers.get('references')) || null;
 
         const meta = await client.fetchOne(uid, { uid: true, source: false });
         const gmailMsgId = meta?.xGMMsgID ?? null;
@@ -887,14 +966,29 @@ async function runOnce() {
 
         const headersJson = {
           'message-id': messageId || undefined,
-          'in-reply-to': norm(mail.inReplyTo) || undefined,
-          'references': Array.isArray(mail.references) ? mail.references : mail.references ? [mail.references] : undefined,
+          'in-reply-to': norm(inReplyTo) || undefined,
+          'references': Array.isArray(references) ? references : references ? [references] : undefined,
           ...Object.fromEntries(
             (headers && headers.keys && headers.get)
               ? Array.from(headers.keys()).map(k => [k, headers.get(k)])
               : []
           )
         };
+
+        // Résolution finale du threadId : d'abord X-Thread-ID si présent, sinon via In-Reply-To/References
+        let threadId = tThreadId;
+        if (!threadId) {
+          try {
+            threadId = await resolveThreadIdByMsgIds({ inReplyTo, references });
+          } catch (e) {
+            console.error('[imapIngest] resolveThreadIdByMsgIds error:', e?.message || e);
+          }
+        }
+        if (!threadId) {
+          console.log(`(skip) incapable de déterminer threadId pour uid=${uid} (pas d’X-Thread-ID et In-Reply-To/References inconnus)`);
+          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true }).catch(() => { });
+          continue;
+        }
 
         const res = await upsertInbound({
           threadId,
@@ -927,8 +1021,13 @@ async function runOnce() {
           at: new Date().toISOString(),
           preview: (text || '').slice(0, 200),
         };
-        console.log("[imapIngest] ABOUT TO NOTIFY payload =", JSON.stringify(payload));
-        await notify('message.ingested', payload);
+if (!res.skipped) {
+  console.log("[imapIngest] notify insert -> thread", threadId);
+  await notify('message.ingested', payload);
+} else {
+  console.log("[imapIngest] dedupe -> not notifying");
+}
+
 
         if (res.skipped) {
           console.log(`✅ Déjà ingéré (idempotent) -> thread ${threadId} (${fromEmail})`);
