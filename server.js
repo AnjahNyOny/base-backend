@@ -50,12 +50,34 @@ app.use((req, res, next) => {
 });
 
 
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-  })
-);
+// --- CORS global (remplace ton app.use(cors(...)) existant) ---
+const ALLOWED_ORIGINS = (process.env.ADMIN_ORIGINS || [
+  "http://10.0.0.47:8080",   // ton dev server
+  "http://localhost:8080",   // variante locale
+  "http://localhost:5173",   // si tu utilises vite à l’occasion
+].join(","))
+  .split(",")
+  .map(s => s.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+
+app.use(cors({
+  origin(origin, cb) {
+    // Autorise requêtes sans Origin (curl, healthchecks)
+    if (!origin) return cb(null, true);
+    const ok = ALLOWED_ORIGINS.includes(origin.replace(/\/+$/, ""));
+    cb(null, ok);
+  },
+  credentials: true,
+}));
+app.options("*", cors({
+  origin(origin, cb) {
+    if (!origin) return cb(null, true);
+    const ok = ALLOWED_ORIGINS.includes(origin.replace(/\/+$/, ""));
+    cb(null, ok);
+  },
+  credentials: true,
+}));
+
 app.options("*", cors({ origin: true, credentials: true }));
 // Headers de sécurité (autorise CORP pour /uploads)
 app.use(helmet({ crossOriginResourcePolicy: false }));
@@ -159,41 +181,47 @@ app.get("/", (_req, res) => {
 /* =========================
    SSE (Server-Sent Events)
    ========================= */
-// 👇 NEW: registre clients SSE + broadcast
 const SSE_HEARTBEAT_MS = 25_000;
 const sseClients = new Set();
 
 function sseBroadcast(event, payload) {
-  const frame =
-    `event: ${event}\n` +
-    `data: ${JSON.stringify(payload)}\n\n`;
-  for (const res of sseClients) {
-    try { res.write(frame); } catch { /* client déconnecté */ }
-  }
+  const frame = `event: ${event}\n` + `data: ${JSON.stringify(payload)}\n\n`;
+  for (const res of sseClients) { try { res.write(frame); } catch {} }
 }
 
-// 👇 NEW: endpoint SSE que le front consomme via EventSource
 app.get("/api/inbound/sse", (req, res) => {
+  // Choisit dynamiquement l’origine exacte du client si elle est autorisée
+  const reqOrigin = String(req.get("origin") || "").replace(/\/+$/, "");
+  const allowOrigin = ALLOWED_ORIGINS.includes(reqOrigin) ? reqOrigin : (ALLOWED_ORIGINS[0] || "*");
+
+  // ⚠️ Avec credentials, interdit d’envoyer "*"
+  if (allowOrigin === "*") {
+    // en dernier recours, refuse si aucune origine autorisée n’est définie
+    return res.status(403).end("CORS origin not allowed");
+  }
+
   res.set({
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache, no-transform",
     "Connection": "keep-alive",
-    "Access-Control-Allow-Origin": "*", // ajuste si besoin
+    "Access-Control-Allow-Origin": allowOrigin,
+    "Access-Control-Allow-Credentials": "true",
+    "Vary": "Origin",
   });
+
   res.flushHeaders?.();
-  res.write("retry: 5000\n\n"); // conseille au client de retenter
+  res.write("retry: 5000\n\n");
 
   const hb = setInterval(() => res.write(": hb\n\n"), SSE_HEARTBEAT_MS);
   sseClients.add(res);
-  try { sseClientsGauge.inc(); } catch (_) {}
 
   req.on("close", () => {
     clearInterval(hb);
     sseClients.delete(res);
-    try { sseClientsGauge.dec(); } catch (_) {}
-    try { res.end(); } catch { }
+    try { res.end(); } catch {}
   });
 });
+
 
 /* =========================
    Webhook interne (appelé par le worker IMAP)

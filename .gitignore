@@ -1,7 +1,7 @@
 # Gitignore pour hs-conseil-backend
 # === Environnement ===
 .env
-.env.*     # .env.local, .env.development, etc.
+
 
 # === Node ===
 node_modules/
