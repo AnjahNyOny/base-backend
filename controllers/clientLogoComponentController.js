@@ -6,30 +6,23 @@ import {
   getClientLogoByPageId,
 } from "../services/clientLogoComponentService.js";
 
-// 🔹 GET agrégé par page_id ?page_id=123
 export const handleGetClientLogo = async (req, res) => {
   try {
     const pageId = Number(req.query.page_id);
     if (!Number.isFinite(pageId) || pageId <= 0) {
       return res.status(400).json({ message: "Paramètre 'page_id' requis et valide." });
     }
-
     const data = await getClientLogoByPageId(pageId);
-    // ⚠️ Comme les autres composants: pas de tableau `images` séparé
-    return res.status(200).json({
-      title: data.title,
-      list: data.list,
-    });
+    return res.status(200).json({ title: data.title, list: data.list });
   } catch (error) {
     console.error("❌ [ClientLogo] Erreur GET agrégé :", error);
     return res.status(500).json({ message: "Erreur lors de la récupération." });
   }
 };
 
-// 🔹 Créer un logo (item)
 export const handleCreateClientLogoComponent = async (req, res) => {
   try {
-    const newItem = await createClientLogoComponent(req.body);
+    const newItem = await createClientLogoComponent(req.body); // image_url/alt passés tels quels
     res.status(201).json(newItem);
   } catch (error) {
     console.error("[ClientLogo] Erreur création :", error.message);
@@ -37,7 +30,6 @@ export const handleCreateClientLogoComponent = async (req, res) => {
   }
 };
 
-// 🔹 Modifier (bulk: titre + items, images upsert côté service)
 export const handleUpdateClientLogoComponent = async (req, res) => {
   try {
     const updated = await updateClientLogoComponent(req.body);
@@ -48,7 +40,6 @@ export const handleUpdateClientLogoComponent = async (req, res) => {
   }
 };
 
-// 🔹 Supprimer un item
 export const handleDeleteClientLogoComponent = async (req, res) => {
   try {
     const deleted = await deleteClientLogoComponent(req.params.id);
