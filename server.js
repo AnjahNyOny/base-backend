@@ -11,6 +11,8 @@ import "dotenv/config";
 import logger from "./services/logger.js";  
 import http from "http";
 import { initRealtime } from "./services/realtime.js"; // si tu veux garder socket.io
+import { mountUploadImagesRoutes } from "./routes/upload-images.js";
+
 
 import {
   register as metricsRegistry,
@@ -92,6 +94,8 @@ app.use("/uploads", express.static(path.resolve(process.cwd(), "uploads")));
 /* =========================
    Routes API
    ========================= */
+   mountUploadImagesRoutes(app);
+
 app.use((req, _res, next) => {
   if (req.path === '/api/inbound/notify') {
     logger.debug('[server] hit /api/inbound/notify');
@@ -99,6 +103,9 @@ app.use((req, _res, next) => {
   next();
 });
 app.use("/api", routes);
+
+
+
 
 +/* =========================
 +   Metrics (Prometheus)

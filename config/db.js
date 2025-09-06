@@ -25,5 +25,13 @@ const db = mysql.createPool({
   queueLimit: 0,
   charset: "utf8mb4_unicode_ci", // conseillé pour accents/emoji
 });
+console.log("[DB] trying", {
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT,
+  user: process.env.DB_USER,
+  db:   process.env.DB_NAME,
+  nodeEnv: process.env.NODE_ENV
+});
+
 
 export default db;
