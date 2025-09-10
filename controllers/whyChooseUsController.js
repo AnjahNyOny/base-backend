@@ -57,12 +57,16 @@ export const handleDeleteWhyChooseUs = async (req, res) => {
   }
 };
 
-// GET /api/why-choose-us?langue=fr
+// GET /api/why-choose-us?langue=fr[&page_id=10]
 export const handleGetWhyChooseUs = async (req, res) => {
   try {
     const langue = (req.query.langue || "fr").trim();
-    console.log("[CTRL Why] GET /why-choose-us langue:", langue);
-    const data = await getWhyChooseUsByLang(langue);
+    // ✅ override optionnel (si fourni)
+    const pageIdOverride = req.query.page_id ? Number(req.query.page_id) : null;
+
+    console.log("[CTRL Why] GET /why-choose-us langue:", langue, "pageIdOverride:", pageIdOverride || "(auto)");
+
+    const data = await getWhyChooseUsByLang(langue, pageIdOverride);
     return res.status(200).json({
       title: data.title,
       list: data.list,

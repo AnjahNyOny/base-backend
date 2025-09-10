@@ -97,23 +97,26 @@ export async function createWhyChooseUs({ titre, description, page_id }) {
   };
 }
 
-// GET agrégé (Option B)
-export async function getWhyChooseUsByLang(langue = "fr") {
-  // 1) Résoudre page_id pour la page "about" de la langue demandée
-  const [rowsPage] = await db.query(
-    `
-    SELECT p.id
-    FROM page p
-    INNER JOIN site s ON p.site_id = s.id
-    WHERE s.langue_active = ?
-      AND (p.slug = 'about' OR p.titre IN ('À propos','About'))
-    LIMIT 1
-    `,
-    [langue]
-  );
-  const pageRow = rowsPage?.[0];
-  if (!pageRow) return { title: null, list: [], images: [] };
-  const pageId = pageRow.id;
+// GET agrégé, avec override optionnel de page_id
+export async function getWhyChooseUsByLang(langue = "fr", pageIdOverride = null) {
+  // 1) Résoudre page_id
+  let pageId = pageIdOverride;
+  if (!pageId) {
+    const [rowsPage] = await db.query(
+      `
+      SELECT p.id
+      FROM page p
+      INNER JOIN site s ON p.site_id = s.id
+      WHERE s.langue_active = ?
+        AND (p.slug = 'about' OR p.titre IN ('À propos','About'))
+      LIMIT 1
+      `,
+      [langue]
+    );
+    const pageRow = rowsPage?.[0];
+    if (!pageRow) return { title: null, list: [], images: [] };
+    pageId = pageRow.id;
+  }
 
   // 2) Titre
   const [rowsTitle] = await db.query(
@@ -139,7 +142,7 @@ export async function getWhyChooseUsByLang(langue = "fr") {
   );
   const list = rowsList || [];
 
-  // 4) Images associées
+  // 4) Images associées (si tu continues à les exploiter)
   let images = [];
   if (list.length) {
     const ids = list.map((r) => r.id);
