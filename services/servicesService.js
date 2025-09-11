@@ -102,7 +102,7 @@ export const deleteService = async (id, page_id = null) => {
   try {
     await conn.beginTransaction();
 
-    // Supprimer les images liées
+    // Supprimer les images liées (inclut image_url/alt/icon_alt)
     await conn.query(`DELETE FROM ContenuImage WHERE contenu_id = ?`, [id]);
 
     // Supprimer le contenu principal (optionnellement sécurisé par page_id)
@@ -162,6 +162,9 @@ export async function createService({ titre, description, page_id }) {
 /**
  * Getter front basé sur page_id :
  * Renvoie { serviceTitle, services, boutons }
+ * - services[].image_url : URL de l’image (si existante)
+ * - services[].alt       : alt de l’image (si existant)
+ * - services[].icon_alt  : token icône "icon:fa-solid fa-…" (si existant)
  */
 export const getServicesWithDetails = async ({ pageId }) => {
   const conn = await db.getConnection();
@@ -171,7 +174,7 @@ export const getServicesWithDetails = async ({ pageId }) => {
       throw new Error("pageId requis (numérique).");
     }
 
-    // Titre
+    // Titre (service_title)
     const [titleRows] = await conn.query(
       `
         SELECT id, type, titre, description, date_publication, page_id
@@ -184,7 +187,7 @@ export const getServicesWithDetails = async ({ pageId }) => {
     );
     const serviceTitle = titleRows?.[0] || null;
 
-    // Items
+    // Items (service_list)
     const [serviceRows] = await conn.query(
       `
         SELECT id, type, titre, description, date_publication, page_id
@@ -195,35 +198,41 @@ export const getServicesWithDetails = async ({ pageId }) => {
       [pid]
     );
 
-    // Images
+    // Images + Icônes (1 ligne ContenuImage par contenu_id)
     let images = [];
     const ids = (serviceRows || []).map(s => s.id);
     if (ids.length > 0) {
       const [imageRows] = await conn.query(
-        `SELECT id, contenu_id, image_url, alt FROM ContenuImage WHERE contenu_id IN (?)`,
+        `
+          SELECT id, contenu_id, image_url, alt, icon_alt
+          FROM ContenuImage
+          WHERE contenu_id IN (?)
+        `,
         [ids]
       );
-      images = imageRows;
+      images = imageRows || [];
     }
 
-    // Boutons (si la table existe)
+    // Boutons (optionnels)
     let boutons = [];
     try {
       const [btnRows] = await conn.query(
         `SELECT * FROM ContenuBouton WHERE section = 'services' AND page_id = ?`,
         [pid]
       );
-      boutons = btnRows;
+      boutons = btnRows || [];
     } catch {
       boutons = [];
     }
 
+    // Merge
     const servicesWithImages = (serviceRows || []).map(svc => {
       const img = images.find(i => i.contenu_id === svc.id);
       return {
         ...svc,
         image_url: img?.image_url || null,
-        alt: img?.alt || "Image du service",
+        alt: img?.alt || null,            // alt de l'image uniquement
+        icon_alt: img?.icon_alt || null,  // token icône icon:fa-solid fa-...
       };
     });
 

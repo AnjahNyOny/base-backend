@@ -2,33 +2,55 @@
 import db from "../config/db.js";
 import { formatDateForMySQL } from "../utils/dateUtils.js";
 
-/** Types dédiés à la section Company Overview */
 const OVERVIEW_TITLE = "company_overview_title";
 const OVERVIEW_ITEM  = "company_overview";
 
-/** GET agrégé par page_id */
+/** GET agrégé par page_id (→ maintenant retourne aussi les images liées aux items) */
+// services/companyOverviewService.js
 export const getCompanyOverviewByPage = async (page_id) => {
   const conn = await db.getConnection();
   try {
-    // Titre
+    // Title
     const [titleRows] = await conn.query(
       `SELECT id, type, titre, description, date_publication, page_id
-         FROM contenu
-        WHERE type = ? AND page_id = ?
-        LIMIT 1`,
-      [OVERVIEW_TITLE, page_id]
+       FROM contenu
+       WHERE type = 'company_overview_title' AND page_id = ?
+       LIMIT 1`,
+      [page_id]
     );
     const overviewTitle = titleRows[0] || null;
 
     // Items
     const [itemRows] = await conn.query(
       `SELECT id, type, titre, description, date_publication, page_id
-         FROM contenu
-        WHERE type = ? AND page_id = ?
-        ORDER BY id ASC`,
-      [OVERVIEW_ITEM, page_id]
+       FROM contenu
+       WHERE type = 'company_overview' AND page_id = ?
+       ORDER BY id ASC`,
+      [page_id]
     );
-    const companyOverviewSections = itemRows;
+
+    // 🔗 Images & icônes
+    let images = [];
+    const ids = (itemRows || []).map(r => r.id);
+    if (ids.length > 0) {
+      const [imageRows] = await conn.query(
+        `SELECT id, contenu_id, image_url, alt, icon_alt
+         FROM ContenuImage
+         WHERE contenu_id IN (?)`,
+        [ids]
+      );
+      images = imageRows || [];
+    }
+
+    const companyOverviewSections = (itemRows || []).map(it => {
+      const media = images.find(m => m.contenu_id === it.id);
+      return {
+        ...it,
+        image_url: media?.image_url || null,
+        alt: media?.alt || null,          // alt = description de l’image
+        icon_alt: media?.icon_alt || null // token "icon:fa-solid fa-..."
+      };
+    });
 
     return { overviewTitle, companyOverviewSections };
   } finally {
@@ -36,7 +58,8 @@ export const getCompanyOverviewByPage = async (page_id) => {
   }
 };
 
-/** POST: créer un item (ligne contenu) */
+
+/** POST / PUT / DELETE inchangés ci-dessous */
 export async function createCompanyOverview({ titre, description, page_id }) {
   const formattedDate = formatDateForMySQL(new Date());
   const safeTitre = String(titre || "").trim();
@@ -46,7 +69,6 @@ export async function createCompanyOverview({ titre, description, page_id }) {
     INSERT INTO contenu (type, titre, description, date_publication, page_id)
     VALUES (?, ?, ?, ?, ?)
   `;
-
   const values = [OVERVIEW_ITEM, safeTitre, safeDesc, formattedDate, Number(page_id)];
   const [result] = await db.query(insertQuery, values);
 
@@ -60,13 +82,11 @@ export async function createCompanyOverview({ titre, description, page_id }) {
   };
 }
 
-/** PUT bulk: mettre à jour titre + items existants (sans images) */
 export const updateCompanyOverview = async ({ overviewTitle, companyOverviewSections }) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
 
-    // --- Titre (type check) ---
     const titleDate = overviewTitle?.date_publication
       ? formatDateForMySQL(overviewTitle.date_publication)
       : formatDateForMySQL(new Date());
@@ -87,7 +107,6 @@ export const updateCompanyOverview = async ({ overviewTitle, companyOverviewSect
       throw Object.assign(new Error("CompanyOverview title introuvable ou mauvais type."), { status: 404 });
     }
 
-    // --- Items (type check) ---
     for (const item of (companyOverviewSections || [])) {
       const itemDate = item?.date_publication
         ? formatDateForMySQL(item.date_publication)
@@ -125,7 +144,6 @@ export const updateCompanyOverview = async ({ overviewTitle, companyOverviewSect
   }
 };
 
-/** DELETE: supprimer un item */
 export const deleteCompanyOverview = async (id) => {
   const conn = await db.getConnection();
   try {

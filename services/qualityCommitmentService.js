@@ -2,12 +2,15 @@
 import db from "../config/db.js";
 import { formatDateForMySQL } from "../utils/dateUtils.js";
 
+/** Types */
+const QC_TITLE = "quality_commitment_title";
+const QC_ITEM  = "quality_commitment";
+
 /**
  * GET agrégé par page_id
- * Renvoie { title, list, images }
- * - title: contenu.type = 'quality_commitment_title'
- * - list : contenu.type = 'quality_commitment'
- * - images: ContenuImage (contenu_id, image_url, alt) pour les items
+ * Renvoie { title, list }
+ * - title: contenu.type = 'quality_commitment_title' + icon_alt (depuis ContenuImage)
+ * - list : contenu.type = 'quality_commitment' (pas d'icône par item)
  */
 export async function getQualityCommitmentByPageId(pageId) {
   // 1) Titre
@@ -15,145 +18,144 @@ export async function getQualityCommitmentByPageId(pageId) {
     `
     SELECT id, titre, description, date_publication, page_id, type
     FROM contenu
-    WHERE page_id = ? AND type = 'quality_commitment_title'
+    WHERE page_id = ? AND type = ?
     LIMIT 1
     `,
-    [pageId]
+    [pageId, QC_TITLE]
   );
   const title = rowsTitle?.[0] || null;
 
-  // 2) Liste d'items
+  // 1.b) Icône du titre (ContenuImage.icon_alt)
+  let icon_alt = "";
+  if (title?.id) {
+    const [rowsIcon] = await db.query(
+      `SELECT icon_alt FROM ContenuImage WHERE contenu_id = ? LIMIT 1`,
+      [title.id]
+    );
+    icon_alt = rowsIcon?.[0]?.icon_alt || "";
+  }
+
+  // 2) Liste d'items (sans icônes)
   const [rowsList] = await db.query(
     `
     SELECT id, titre, description, date_publication, page_id, type
     FROM contenu
-    WHERE page_id = ? AND type = 'quality_commitment'
+    WHERE page_id = ? AND type = ?
     ORDER BY id ASC
     `,
-    [pageId]
+    [pageId, QC_ITEM]
   );
   const list = rowsList || [];
 
-  // 3) Images liées aux items
-  let images = [];
-  const ids = list.map((r) => r.id);
-  if (ids.length) {
-    const [rowsImages] = await db.query(
-      `
-      SELECT contenu_id, image_url, alt
-      FROM ContenuImage
-      WHERE contenu_id IN (${ids.map(() => "?").join(",")})
-      `,
-      ids
-    );
-    images = rowsImages || [];
-  }
-
-  return { title, list, images };
+  return { title: title ? { ...title, icon_alt } : null, list };
 }
 
 /**
- * Bulk update (titre + items texte) + upsert des images dans ContenuImage.
+ * Bulk update (titre + items texte) + upsert de l’icône du titre (icon_alt)
  * Attendu: {
- *   qualityCommitmentTitle: {id, titre, description, date_publication?},
- *   qualityCommitmentList: [{id, titre, description, image_url?, alt?, date_publication?}, ...]
+ *   qualityCommitmentTitle: {id, titre, description, date_publication?, icon_alt?},
+ *   qualityCommitmentList: [{id, titre, description, date_publication?}, ...]
  * }
  */
 export const updateQualityCommitment = async ({
   qualityCommitmentTitle,
   qualityCommitmentList,
 }) => {
+  const conn = await db.getConnection();
   try {
+    await conn.beginTransaction();
+
     // -- Update du Titre (table contenu)
     const formattedDate = qualityCommitmentTitle?.date_publication
       ? formatDateForMySQL(qualityCommitmentTitle.date_publication)
       : formatDateForMySQL(new Date());
 
-    await db.query(
+    const [resTitle] = await conn.query(
       `
       UPDATE contenu
-      SET titre = ?, description = ?, date_publication = ?
-      WHERE id = ?;
+         SET titre = ?, description = ?, date_publication = ?
+       WHERE id = ? AND type = ?
       `,
       [
-        qualityCommitmentTitle.titre,
-        qualityCommitmentTitle.description ?? null,
+        (qualityCommitmentTitle?.titre ?? "").trim(),
+        qualityCommitmentTitle?.description ?? null,
         formattedDate,
-        qualityCommitmentTitle.id,
+        qualityCommitmentTitle?.id,
+        QC_TITLE,
       ]
     );
+    if (!resTitle.affectedRows) {
+      throw Object.assign(new Error("Titre introuvable ou mauvais type."), { status: 404 });
+    }
 
-    // -- Update des items + upsert image (ContenuImage)
+    // -- Upsert de l'icône du titre (ContenuImage.icon_alt)
+    const token = (qualityCommitmentTitle?.icon_alt || "").trim();
+    // ⚠️ on conserve image_url/alt vides car on n'utilise que l'icône
+    const [rowImg] = await conn.query(
+      `SELECT id FROM ContenuImage WHERE contenu_id = ? LIMIT 1`,
+      [qualityCommitmentTitle.id]
+    );
+    const cur = rowImg?.[0];
+    if (!token) {
+      if (cur?.id) await conn.query(`DELETE FROM ContenuImage WHERE id = ?`, [cur.id]);
+    } else {
+      if (cur?.id) {
+        await conn.query(
+          `UPDATE ContenuImage SET icon_alt = ?, image_url = '', alt = '' WHERE id = ?`,
+          [token, cur.id]
+        );
+      } else {
+        await conn.query(
+          `INSERT INTO ContenuImage (contenu_id, icon_alt, image_url, alt) VALUES (?, ?, '', '')`,
+          [qualityCommitmentTitle.id, token]
+        );
+      }
+    }
+
+    // -- Update des items (texte uniquement)
     for (const item of qualityCommitmentList || []) {
       const itemDate = item?.date_publication
         ? formatDateForMySQL(item.date_publication)
         : formatDateForMySQL(new Date());
 
-      // 1) Texte dans contenu (PAS d'image ici)
-      await db.query(
+      await conn.query(
         `
         UPDATE contenu
-        SET titre = ?, description = ?, date_publication = ?
-        WHERE id = ?;
+           SET titre = ?, description = ?, date_publication = ?
+         WHERE id = ? AND type = ?
         `,
-        [item.titre, item.description ?? null, itemDate, item.id]
+        [
+          (item?.titre ?? "").trim(),
+          item?.description ?? null,
+          itemDate,
+          item?.id,
+          QC_ITEM,
+        ]
       );
-
-      // 2) Image dans ContenuImage (upsert)
-      const url = (item.image_url || "").trim();
-      const alt = (item.alt || "").trim();
-
-      // Existe déjà ?
-      const [rowsImg] = await db.query(
-        `SELECT id FROM ContenuImage WHERE contenu_id = ? LIMIT 1`,
-        [item.id]
-      );
-      const current = rowsImg?.[0];
-
-      if (!url) {
-        // aucune URL => supprime l’éventuelle image liée
-        if (current?.id) {
-          await db.query(`DELETE FROM ContenuImage WHERE id = ?`, [current.id]);
-        }
-      } else {
-        if (current?.id) {
-          // update
-          await db.query(
-            `UPDATE ContenuImage SET image_url = ?, alt = ? WHERE id = ?`,
-            [url, alt || null, current.id]
-          );
-        } else {
-          // create
-          await db.query(
-            `INSERT INTO ContenuImage (contenu_id, image_url, alt) VALUES (?, ?, ?)`,
-            [item.id, url, alt || null]
-          );
-        }
-      }
     }
 
+    await conn.commit();
     return {
-      message: "Section Quality Commitment mise à jour avec succès.",
+      message: "Quality Commitment mis à jour avec succès.",
       updatedTitle: qualityCommitmentTitle,
       updatedList: qualityCommitmentList,
     };
   } catch (error) {
-    console.error("[ERROR] updateQualityCommitment:", error.message);
+    await conn.rollback();
+    console.error("[ERROR] updateQualityCommitment:", error?.message || error);
     throw error;
+  } finally {
+    conn.release();
   }
 };
 
-/**
- * Suppression d’un item (et de ses images liées).
- */
+/** Suppression d’un item (et de ses images liées) */
 export const deleteQualityCommitment = async (id) => {
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
-
     await connection.query(`DELETE FROM ContenuImage WHERE contenu_id = ?`, [id]);
-    await connection.query(`DELETE FROM contenu WHERE id = ?`, [id]);
-
+    await connection.query(`DELETE FROM contenu WHERE id = ? AND type = ?`, [id, QC_ITEM]);
     await connection.commit();
     return { message: "Élément supprimé avec succès." };
   } catch (error) {
@@ -165,27 +167,23 @@ export const deleteQualityCommitment = async (id) => {
   }
 };
 
-/**
- * Création d’un item (ligne 'quality_commitment')
- * Attendu: { titre, description, page_id }
- */
+/** Création d’un item */
 export async function createQualityCommitment({ titre, description, page_id }) {
   const formattedDate = formatDateForMySQL(new Date());
-
   const [result] = await db.query(
     `
     INSERT INTO contenu (type, titre, description, date_publication, page_id)
     VALUES (?, ?, ?, ?, ?)
     `,
-    ["quality_commitment", titre, description ?? null, formattedDate, page_id]
+    [QC_ITEM, (titre ?? "").trim(), description ?? null, formattedDate, Number(page_id)]
   );
 
   return {
     id: result.insertId,
     titre,
     description: description ?? null,
-    type: "quality_commitment",
+    type: QC_ITEM,
     date_publication: formattedDate,
-    page_id,
+    page_id: Number(page_id),
   };
 }

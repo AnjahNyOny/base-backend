@@ -6,7 +6,7 @@ import { formatDateForMySQL } from "../utils/dateUtils.js";
 const FOCUS_TITLE = "focusComponent_title";
 const FOCUS_ITEM  = "focusComponent_list";
 
-/** GET agrégé par page_id */
+/** GET agrégé par page_id (→ expose aussi icon_alt) */
 export const getFocusComponentByPage = async (page_id) => {
   const conn = await db.getConnection();
   try {
@@ -29,26 +29,27 @@ export const getFocusComponentByPage = async (page_id) => {
       [FOCUS_ITEM, page_id]
     );
 
-    // Images liées
+    // Images liées (⚠️ table: ContenuImage + sélection icon_alt)
     let images = [];
     if (itemRows.length) {
       const ids = itemRows.map(r => r.id);
       const [imgRows] = await conn.query(
-        `SELECT id, contenu_id, image_url, alt
-           FROM contenuimage
+        `SELECT id, contenu_id, image_url, alt, icon_alt
+           FROM ContenuImage
           WHERE contenu_id IN (?)`,
         [ids]
       );
-      images = imgRows;
+      images = imgRows || [];
     }
 
-    // Associer image à chaque item
+    // Associer image/icône à chaque item
     const focusList = itemRows.map(it => {
       const img = images.find(i => i.contenu_id === it.id);
       return {
         ...it,
-        image_url: img?.image_url || null,
-        alt: img?.alt || "",
+        image_url: img?.image_url || null, // image optionnelle
+        alt: img?.alt || "",               // alt descriptif de l'image
+        icon_alt: img?.icon_alt || null,   // 🎯 token d’icône "icon:fa-solid fa-…"
       };
     });
 
@@ -87,7 +88,7 @@ export const updateFocusComponent = async ({ focusTitle, focusList }) => {
   try {
     await conn.beginTransaction();
 
-    // --- Titre (avec contrôle de type) ---
+    // --- Titre ---
     const titleDate = focusTitle?.date_publication
       ? formatDateForMySQL(focusTitle.date_publication)
       : formatDateForMySQL(new Date());
@@ -108,7 +109,7 @@ export const updateFocusComponent = async ({ focusTitle, focusList }) => {
       throw Object.assign(new Error("Focus title introuvable ou mauvais type."), { status: 404 });
     }
 
-    // --- Items (avec contrôle de type) ---
+    // --- Items ---
     for (const item of (focusList || [])) {
       const itemDate = item?.date_publication
         ? formatDateForMySQL(item.date_publication)
@@ -146,13 +147,13 @@ export const updateFocusComponent = async ({ focusTitle, focusList }) => {
   }
 };
 
-/** DELETE: supprimer un item + ses images */
+/** DELETE: supprimer un item + ses images/icônes */
 export const deleteFocusComponent = async (id) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
 
-    await conn.query(`DELETE FROM contenuimage WHERE contenu_id = ?`, [id]);
+    await conn.query(`DELETE FROM ContenuImage WHERE contenu_id = ?`, [id]);
     await conn.query(`DELETE FROM contenu WHERE id = ? AND type = ?`, [id, FOCUS_ITEM]);
 
     await conn.commit();

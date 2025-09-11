@@ -142,14 +142,14 @@ export async function getWhyChooseUsByLang(langue = "fr", pageIdOverride = null)
   );
   const list = rowsList || [];
 
-  // 4) Images associées (si tu continues à les exploiter)
+  // 4) Images associées (icônes) — inclure icon_alt
   let images = [];
   if (list.length) {
     const ids = list.map((r) => r.id);
     const placeholders = ids.map(() => "?").join(",");
     const [rowsImages] = await db.query(
       `
-      SELECT id, contenu_id, image_url, alt
+      SELECT id, contenu_id, image_url, alt, icon_alt
       FROM ContenuImage
       WHERE contenu_id IN (${placeholders})
       `,

@@ -14,14 +14,19 @@ export const fetchCompanyOverviewByPage = async (req, res) => {
       return res.status(400).json({ message: "Paramètre 'page_id' requis et valide." });
     }
     const data = await getCompanyOverviewByPage(page_id);
-    res.json(data);
+    // ⬇️ Désormais on renvoie aussi `images` (alt = token d’icône)
+    res.json({
+      overviewTitle: data.overviewTitle,
+      companyOverviewSections: data.companyOverviewSections,
+      images: data.images,
+    });
   } catch (error) {
     console.error("[CompanyOverview] GET error:", error?.message || error);
     res.status(500).json({ message: "Erreur lors de la récupération de CompanyOverview." });
   }
 };
 
-// POST /api/company-overview  { titre, description, page_id }
+// POST / PUT / DELETE non modifiés…
 export const handleCreateCompanyOverview = async (req, res) => {
   try {
     const { titre, description, page_id } = req.body || {};
@@ -36,7 +41,6 @@ export const handleCreateCompanyOverview = async (req, res) => {
   }
 };
 
-// PUT /api/company-overview   { overviewTitle: {...}, companyOverviewSections: [{...}] }
 export const handleUpdateCompanyOverview = async (req, res) => {
   try {
     const { overviewTitle, companyOverviewSections } = req.body || {};
@@ -55,7 +59,6 @@ export const handleUpdateCompanyOverview = async (req, res) => {
   }
 };
 
-// DELETE /api/company-overview/:id
 export const handleDeleteCompanyOverview = async (req, res) => {
   try {
     const { id } = req.params;
