@@ -2,6 +2,9 @@
 # === Environnement ===
 .env
 
+# .gitignore (ajoute ces lignes)
+logs/
+*.log
 
 # === Node ===
 node_modules/

@@ -1,6 +1,7 @@
 // services/servicesService.js
 import db from "../config/db.js";
 import { formatDateForMySQL } from "../utils/dateUtils.js";
+import { randomUUID } from "crypto";
 
 /* ===========================================================
    Helpers slug
@@ -18,7 +19,7 @@ function toSlug(s = "") {
     : str;
 
   return noAccents
-    .replace(/[’'°]/g, "")      // apostrophes & degrés courants
+    .replace(/[’'°]/g, "")       // apostrophes & degrés
     .replace(/[^a-z0-9]+/g, "-") // tout ce qui n'est pas a-z/0-9 => "-"
     .replace(/^-+|-+$/g, "");    // trim des "-"
 }
@@ -32,9 +33,6 @@ async function ensureUniqueSlug(conn, pageId, baseSlug, excludeId = null) {
   let candidate = baseSlug && baseSlug.length ? baseSlug : "service";
   let suffix = 0;
 
-  // On boucle tant qu'un doublon existe
-  // (sécurise en cas d'index unique en DB et/ou multi-serveurs)
-  // NOTE: on borne la boucle et fallback sur Date.now() si collision improbable.
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const params = [pageId, candidate];
@@ -62,14 +60,38 @@ async function ensureUniqueSlug(conn, pageId, baseSlug, excludeId = null) {
   }
 }
 
+/**
+ * Garantit l'absence de collision de service_key sur une *même page*.
+ * Si "providedKey" est vide → génère un UUID.
+ * Si une collision existe sur (page_id, service_key) → régénère.
+ */
+async function resolveServiceKeyForCreate(conn, pageId, providedKey = null) {
+  let key = (providedKey && String(providedKey).trim()) || randomUUID();
+  // On boucle très peu probable (uuid) mais on sécurise.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const [rows] = await conn.query(
+      `
+        SELECT id FROM contenu
+        WHERE page_id = ? AND type = 'service_list' AND service_key = ?
+        LIMIT 1
+      `,
+      [pageId, key]
+    );
+    if (!rows || rows.length === 0) return key;
+    key = randomUUID();
+  }
+}
+
 /* ===========================================================
-   UPDATE (titre + items) — conserve ta transaction et ajoute le slug
+   UPDATE (titre + items) — conserve la transaction, MAJ slug si fourni
    =========================================================== */
 
 /**
  * Met à jour le titre (type='service_title') + les items (type='service_list').
  * Reçoit: { servicesTitle, servicesList, page_id }
  * - Si un item contient "slug", on le normalise et on l'applique (unicité garantie).
+ * - ⚠️ Ne touche *jamais* à service_key ici (readonly).
  */
 export const updateService = async ({ servicesTitle, servicesList, page_id }) => {
   const conn = await db.getConnection();
@@ -111,7 +133,7 @@ export const updateService = async ({ servicesTitle, servicesList, page_id }) =>
       );
     }
 
-    // 🔁 MAJ des items (titre/description/date) + slug si fourni
+    // 🔁 MAJ des items (titre/description/date) + slug si fourni (service_key untouched)
     for (const item of servicesList || []) {
       const itemDate = item?.date_publication
         ? formatDateForMySQL(item.date_publication)
@@ -177,9 +199,8 @@ export const updateService = async ({ servicesTitle, servicesList, page_id }) =>
 };
 
 /* ===========================================================
-   DELETE — inchangé (supprime images liées, puis contenu)
+   DELETE — supprime images liées, puis contenu
    =========================================================== */
-
 export const deleteService = async (id, page_id = null) => {
   const conn = await db.getConnection();
   try {
@@ -212,56 +233,175 @@ export const deleteService = async (id, page_id = null) => {
 };
 
 /* ===========================================================
-   CREATE — ajoute le slug (unicité garantie)
+   CREATE — ajoute slug + service_key
    =========================================================== */
+/**
+ * Crée un service_list avec :
+ *  - slug unique sur (page_id)
+ *  - service_key (fourni ou généré), sans collision sur la *même page*
+ *  - retourne l'objet créé
+ */
+export async function createService({ titre, description, page_id, slug, service_key = null }) {
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
 
-export async function createService({ titre, description, page_id, slug }) {
-  const formattedDate = formatDateForMySQL(new Date());
-  const safeTitre = String(titre || "").trim();
-  const safeDesc  = String(description || "").trim();
-  const pid = Number(page_id);
+    const formattedDate = formatDateForMySQL(new Date());
+    const safeTitre = String(titre || "").trim();
+    const safeDesc  = String(description || "").trim();
+    const pid = Number(page_id);
 
-  if (!Number.isFinite(pid)) {
-    throw Object.assign(new Error("page_id invalide ou manquant."), { status: 400 });
+    if (!Number.isFinite(pid)) {
+      throw Object.assign(new Error("page_id invalide ou manquant."), { status: 400 });
+    }
+    if (!safeTitre) {
+      throw Object.assign(new Error("Le titre est requis."), { status: 400 });
+    }
+
+    // Slug désiré (slug fourni ou dérivé du titre)
+    const desired = toSlug(slug || safeTitre) || `service-${Date.now()}`;
+    const finalSlug = await ensureUniqueSlug(conn, pid, desired, null);
+
+    // service_key (fourni ou généré) — éviter collision pour *cette page*
+    const finalServiceKey = await resolveServiceKeyForCreate(conn, pid, service_key);
+
+    const [result] = await conn.query(
+      `
+        INSERT INTO contenu (type, titre, description, slug, service_key, date_publication, page_id)
+        VALUES ('service_list', ?, ?, ?, ?, ?, ?)
+      `,
+      [safeTitre, safeDesc, finalSlug, finalServiceKey, formattedDate, pid]
+    );
+
+    await conn.commit();
+
+    return {
+      id: result.insertId,
+      titre: safeTitre,
+      description: safeDesc,
+      slug: finalSlug,
+      service_key: finalServiceKey,
+      type: "service_list",
+      date_publication: formattedDate,
+      page_id: pid,
+    };
+  } catch (e) {
+    try { await conn.rollback(); } catch {}
+    throw e;
+  } finally {
+    conn.release();
   }
-  if (!safeTitre) {
-    throw Object.assign(new Error("Le titre est requis."), { status: 400 });
-  }
-
-  // Slug désiré (slug fourni ou dérivé du titre)
-  const desired = toSlug(slug || safeTitre) || `service-${Date.now()}`;
-  const finalSlug = await ensureUniqueSlug(db, pid, desired, null);
-
-  const [result] = await db.query(
-    `
-      INSERT INTO contenu (type, titre, description, slug, date_publication, page_id)
-      VALUES ('service_list', ?, ?, ?, ?, ?)
-    `,
-    [safeTitre, safeDesc, finalSlug, formattedDate, pid]
-  );
-
-  return {
-    id: result.insertId,
-    titre: safeTitre,
-    description: safeDesc,
-    slug: finalSlug,
-    type: "service_list",
-    date_publication: formattedDate,
-    page_id: pid,
-  };
 }
 
 /* ===========================================================
-   GETTER front — expose le slug aussi
+   DUPLICATE — vers une autre page/langue en conservant service_key
+   =========================================================== */
+/**
+ * Duplique un service source (par id) vers une page cible, en conservant la service_key.
+ * - Copie aussi l'image (ContenuImage) si présente.
+ * - Slug recalculé (ou override) et rendu unique sur la page cible.
+ */
+export async function duplicateServiceToPage({
+  source_id,
+  target_page_id,
+  slugOverride = null,
+  titreOverride = null,
+  descriptionOverride = null,
+}) {
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const tid = Number(target_page_id);
+    if (!Number.isFinite(tid)) {
+      throw Object.assign(new Error("target_page_id invalide."), { status: 400 });
+    }
+
+    // Récupérer la source
+    const [srcRows] = await conn.query(
+      `
+        SELECT c.id, c.page_id, c.titre, c.description, c.slug, c.service_key
+        FROM contenu c
+        WHERE c.id = ? AND c.type = 'service_list'
+        LIMIT 1
+      `,
+      [Number(source_id)]
+    );
+    const src = srcRows?.[0];
+    if (!src) {
+      const err = new Error("Service source introuvable.");
+      err.status = 404; throw err;
+    }
+
+    // S'assurer que la source a une service_key (sinon on lui en attribue une)
+    let key = src.service_key;
+    if (!key) {
+      key = randomUUID();
+      await conn.query(
+        `UPDATE contenu SET service_key = ? WHERE id = ? AND type = 'service_list'`,
+        [key, src.id]
+      );
+    }
+
+    // Préparer les champs de la cible
+    const titre = (titreOverride ?? src.titre ?? "").trim();
+    const description = (descriptionOverride ?? src.description ?? "").trim();
+
+    const desiredSlug = toSlug(slugOverride || titre) || `service-${Date.now()}`;
+    const finalSlug = await ensureUniqueSlug(conn, tid, desiredSlug, null);
+
+    // ⚠️ on réutilise *la même* service_key (clé logique entre langues)
+    // et on évite collision sur *cette page* (peu probable si cross-langue)
+    const finalKey = await resolveServiceKeyForCreate(conn, tid, key);
+
+    const now = formatDateForMySQL(new Date());
+    const [ins] = await conn.query(
+      `
+        INSERT INTO contenu (type, titre, description, slug, service_key, date_publication, page_id)
+        VALUES ('service_list', ?, ?, ?, ?, ?, ?)
+      `,
+      [titre, description, finalSlug, finalKey, now, tid]
+    );
+    const newId = ins.insertId;
+
+    // Copier l'image liée si présente
+    const [imgRows] = await conn.query(
+      `SELECT image_url, alt, icon_alt FROM ContenuImage WHERE contenu_id = ? LIMIT 1`,
+      [src.id]
+    );
+    if (imgRows?.length) {
+      const img = imgRows[0];
+      await conn.query(
+        `
+          INSERT INTO ContenuImage (contenu_id, image_url, alt, icon_alt)
+          VALUES (?, ?, ?, ?)
+        `,
+        [newId, img.image_url || "", img.alt || null, img.icon_alt || null]
+      );
+    }
+
+    await conn.commit();
+    return { id: newId, slug: finalSlug, service_key: finalKey, page_id: tid };
+  } catch (e) {
+    try { await conn.rollback(); } catch {}
+    throw e;
+  } finally {
+    conn.release();
+  }
+}
+
+/* ===========================================================
+   GETTER front — expose aussi le service_key
    =========================================================== */
 
 /**
  * Getter front basé sur page_id :
  * Renvoie { serviceTitle, services, boutons }
- * - services[].slug      : slug du service
- * - services[].image_url : URL de l’image (si existante)
- * - services[].alt       : alt de l’image (si existant)
- * - services[].icon_alt  : token icône "icon:fa-solid fa-…" (si existant)
+ * - services[].slug        : slug du service
+ * - services[].service_key : clé logique de liaison inter-langues
+ * - services[].image_url   : URL de l’image (si existante)
+ * - services[].alt         : alt de l’image (si existant)
+ * - services[].icon_alt    : token icône "icon:fa-solid fa-…" (si existant)
  */
 export const getServicesWithDetails = async ({ pageId }) => {
   const conn = await db.getConnection();
@@ -284,10 +424,10 @@ export const getServicesWithDetails = async ({ pageId }) => {
     );
     const serviceTitle = titleRows?.[0] || null;
 
-    // Items (service_list) — on expose aussi le slug
+    // Items (service_list) — on expose aussi slug + service_key
     const [serviceRows] = await conn.query(
       `
-        SELECT id, type, titre, description, slug, date_publication, page_id
+        SELECT id, type, titre, description, slug, service_key, date_publication, page_id
         FROM contenu
         WHERE type = 'service_list' AND page_id = ?
         ORDER BY date_publication DESC, id DESC

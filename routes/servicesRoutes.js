@@ -5,6 +5,7 @@ import {
   handleUpdateService,
   handleDeleteService,
   fetchServicesByPage,
+  handleDuplicateService, // ✅ nouveau
 } from "../controllers/servicesController.js";
 
 const router = express.Router();
@@ -22,9 +23,13 @@ router.use((req, _res, next) => {
   }
   next();
 });
+
 router.get("/services", fetchServicesByPage);
 router.post("/services", handleCreateService);
 router.put("/services", handleUpdateService);
 router.delete("/services/:id", handleDeleteService);
+
+// ✅ duplication inter-langue/page (conserve service_key)
+router.post("/services/:id/duplicate", handleDuplicateService);
 
 export default router;
