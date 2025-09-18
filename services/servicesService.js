@@ -2,10 +2,74 @@
 import db from "../config/db.js";
 import { formatDateForMySQL } from "../utils/dateUtils.js";
 
+/* ===========================================================
+   Helpers slug
+   =========================================================== */
+
+/** Transforme un texte en slug URL-safe (accent-insensitive). */
+function toSlug(s = "") {
+  const str = String(s || "")
+    .trim()
+    .toLowerCase();
+
+  // retire les accents si possible
+  const noAccents = str.normalize
+    ? str.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    : str;
+
+  return noAccents
+    .replace(/[’'°]/g, "")      // apostrophes & degrés courants
+    .replace(/[^a-z0-9]+/g, "-") // tout ce qui n'est pas a-z/0-9 => "-"
+    .replace(/^-+|-+$/g, "");    // trim des "-"
+}
+
 /**
- * Met à jour le titre (type='service_title') + les items (type='service_list') pour une page donnée.
+ * Garantit l'unicité d'un slug pour (page_id, type='service_list').
+ * - conn: connexion (pool ou transaction) avec .query(...)
+ * - excludeId: id du contenu à exclure lors d'un update
+ */
+async function ensureUniqueSlug(conn, pageId, baseSlug, excludeId = null) {
+  let candidate = baseSlug && baseSlug.length ? baseSlug : "service";
+  let suffix = 0;
+
+  // On boucle tant qu'un doublon existe
+  // (sécurise en cas d'index unique en DB et/ou multi-serveurs)
+  // NOTE: on borne la boucle et fallback sur Date.now() si collision improbable.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const params = [pageId, candidate];
+    let sql = `
+      SELECT id FROM contenu
+      WHERE page_id = ? AND type = 'service_list' AND slug = ?
+    `;
+    if (excludeId != null) {
+      sql += ` AND id <> ?`;
+      params.push(Number(excludeId));
+    }
+    sql += ` LIMIT 1`;
+
+    const [rows] = await conn.query(sql, params);
+    if (!rows || rows.length === 0) return candidate;
+
+    suffix += 1;
+    if (suffix <= 10) {
+      candidate = `${baseSlug}-${suffix}`;
+    } else if (excludeId) {
+      candidate = `${baseSlug}-${excludeId}`;
+    } else {
+      candidate = `${baseSlug}-${Date.now()}`;
+    }
+  }
+}
+
+/* ===========================================================
+   UPDATE (titre + items) — conserve ta transaction et ajoute le slug
+   =========================================================== */
+
+/**
+ * Met à jour le titre (type='service_title') + les items (type='service_list').
  * Reçoit: { servicesTitle, servicesList, page_id }
- * Sécurisé par: type + page_id.
+ * - Si un item contient "slug", on le normalise et on l'applique (unicité garantie).
  */
 export const updateService = async ({ servicesTitle, servicesList, page_id }) => {
   const conn = await db.getConnection();
@@ -47,12 +111,13 @@ export const updateService = async ({ servicesTitle, servicesList, page_id }) =>
       );
     }
 
-    // 🔁 MAJ des items UNIQUEMENT si type=service_list ET page_id correspond
+    // 🔁 MAJ des items (titre/description/date) + slug si fourni
     for (const item of servicesList || []) {
       const itemDate = item?.date_publication
         ? formatDateForMySQL(item.date_publication)
         : formatDateForMySQL(new Date());
 
+      // 1) MAJ titre/description/date
       const [itemRes] = await conn.query(
         `
           UPDATE contenu
@@ -76,6 +141,24 @@ export const updateService = async ({ servicesTitle, servicesList, page_id }) =>
           { status: 404 }
         );
       }
+
+      // 2) MAJ slug si fourni
+      const raw = typeof item?.slug === "string" ? item.slug : null;
+      const desired = raw ? toSlug(raw) : null;
+
+      if (desired && desired.length) {
+        const unique = await ensureUniqueSlug(conn, pid, desired, item?.id);
+        await conn.query(
+          `
+            UPDATE contenu
+            SET slug = ?
+            WHERE id = ?
+              AND type = 'service_list'
+              AND page_id = ?;
+          `,
+          [unique, item?.id, pid]
+        );
+      }
     }
 
     await conn.commit();
@@ -85,7 +168,7 @@ export const updateService = async ({ servicesTitle, servicesList, page_id }) =>
       updatedList: servicesList,
     };
   } catch (error) {
-    try { await conn.rollback(); } catch { }
+    try { await conn.rollback(); } catch { /* ignore */ }
     console.error("[ERROR] updateServicesComponent:", error?.message || error);
     throw error;
   } finally {
@@ -93,10 +176,10 @@ export const updateService = async ({ servicesTitle, servicesList, page_id }) =>
   }
 };
 
-/**
- * Suppression d’un service + images liées pour la page donnée (sécurisé par page_id).
- * Reçoit (id, page_id). Si tu ne veux pas vérifier page_id ici, retire la clause AND page_id.
- */
+/* ===========================================================
+   DELETE — inchangé (supprime images liées, puis contenu)
+   =========================================================== */
+
 export const deleteService = async (id, page_id = null) => {
   const conn = await db.getConnection();
   try {
@@ -120,7 +203,7 @@ export const deleteService = async (id, page_id = null) => {
     }
     return { message: "Service supprimé avec succès." };
   } catch (error) {
-    try { await conn.rollback(); } catch { }
+    try { await conn.rollback(); } catch { /* ignore */ }
     console.error("[ERROR] deleteService:", error?.message || error);
     throw error;
   } finally {
@@ -128,40 +211,54 @@ export const deleteService = async (id, page_id = null) => {
   }
 };
 
-/**
- * Création d’un item service (type='service_list') pour une page.
- */
-export async function createService({ titre, description, page_id }) {
+/* ===========================================================
+   CREATE — ajoute le slug (unicité garantie)
+   =========================================================== */
+
+export async function createService({ titre, description, page_id, slug }) {
   const formattedDate = formatDateForMySQL(new Date());
   const safeTitre = String(titre || "").trim();
-  const safeDesc = String(description || "").trim();
+  const safeDesc  = String(description || "").trim();
   const pid = Number(page_id);
 
   if (!Number.isFinite(pid)) {
     throw Object.assign(new Error("page_id invalide ou manquant."), { status: 400 });
   }
+  if (!safeTitre) {
+    throw Object.assign(new Error("Le titre est requis."), { status: 400 });
+  }
+
+  // Slug désiré (slug fourni ou dérivé du titre)
+  const desired = toSlug(slug || safeTitre) || `service-${Date.now()}`;
+  const finalSlug = await ensureUniqueSlug(db, pid, desired, null);
 
   const [result] = await db.query(
     `
-      INSERT INTO contenu (type, titre, description, date_publication, page_id)
-      VALUES ('service_list', ?, ?, ?, ?)
+      INSERT INTO contenu (type, titre, description, slug, date_publication, page_id)
+      VALUES ('service_list', ?, ?, ?, ?, ?)
     `,
-    [safeTitre, safeDesc, formattedDate, pid]
+    [safeTitre, safeDesc, finalSlug, formattedDate, pid]
   );
 
   return {
     id: result.insertId,
     titre: safeTitre,
     description: safeDesc,
+    slug: finalSlug,
     type: "service_list",
     date_publication: formattedDate,
     page_id: pid,
   };
 }
 
+/* ===========================================================
+   GETTER front — expose le slug aussi
+   =========================================================== */
+
 /**
  * Getter front basé sur page_id :
  * Renvoie { serviceTitle, services, boutons }
+ * - services[].slug      : slug du service
  * - services[].image_url : URL de l’image (si existante)
  * - services[].alt       : alt de l’image (si existant)
  * - services[].icon_alt  : token icône "icon:fa-solid fa-…" (si existant)
@@ -187,10 +284,10 @@ export const getServicesWithDetails = async ({ pageId }) => {
     );
     const serviceTitle = titleRows?.[0] || null;
 
-    // Items (service_list)
+    // Items (service_list) — on expose aussi le slug
     const [serviceRows] = await conn.query(
       `
-        SELECT id, type, titre, description, date_publication, page_id
+        SELECT id, type, titre, description, slug, date_publication, page_id
         FROM contenu
         WHERE type = 'service_list' AND page_id = ?
         ORDER BY date_publication DESC, id DESC

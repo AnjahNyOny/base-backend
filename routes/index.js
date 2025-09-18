@@ -99,6 +99,12 @@ import notifyRoutes from "./notifyRoutes.js";
 import contactRoutes from "./contactRoutes.js";               // ✅ /contact/threads, /contact/labels, …
 import contactClientRoutes from "./contactClientRoutes.js";   // ✅ /contactClient-*, /contactClient
 
+// Details
+import serviceDetailRoutes from "./serviceDetailRoutes.js";
+
+
+
+
 // Legacy (à retirer) : emailRoutes.js SUPPRIMÉ
 
 const router = express.Router();
@@ -138,6 +144,9 @@ router.use("/", contactClientRoutes);  // Page Contact (contenu + envoi public)
 import inboundRoutes from "./inbound.routes.js";
 router.use("/", notifyRoutes);
 router.use("/inbound", inboundRoutes);
+
+/* ===== DETAILS ===== */
+router.use("/", serviceDetailRoutes);
 
 /* ===== Filets de sécurité (optionnel) ===== */
 // Si jamais un ancien client appelle encore /emails/*, renvoie 410 Gone
