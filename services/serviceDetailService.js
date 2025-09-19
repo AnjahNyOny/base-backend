@@ -210,42 +210,81 @@ export async function translateSlug({ slug, fromPageId = null, toPageId = null, 
 }
 
 /** Récupérer le détail par (page_id, slug) */
-export async function getServiceDetailBySlug({ page_id, slug }) {
+export async function getServiceDetailBySlug({ slug, page_id, mustBePublished = true }) {
   const pid = Number(page_id);
-  if (!Number.isFinite(pid) || !slug) throw new Error("page_id et slug requis.");
+  const s   = String(slug || "").trim();
+  if (!Number.isFinite(pid) || !s) return null;
 
   const [rows] = await db.query(
     `
-      SELECT c.id            AS contenu_id,
-             c.page_id,
-             c.titre,
-             c.slug,
-             c.description   AS intro,
-             sd.excerpt,
-             sd.body_md,
-             sd.features_json,
-             sd.faq_json,
-             COALESCE(sd.hero_image_url, img.image_url) AS hero_image_url,
-             img.alt,
-             img.icon_alt,
-             sd.gallery_json,
-             sd.tags_json,
-             sd.status,
-             sd.created_at,
-             sd.updated_at,
-             img.image_url
+      SELECT
+        c.id                AS contenu_id,
+        c.page_id,
+        c.titre,
+        c.slug,
+        c.description,
+        c.date_publication,
+
+        img.image_url,
+        img.alt,
+        img.icon_alt,
+
+        sd.excerpt,
+        sd.body_md,
+        sd.features_json,
+        sd.faq_json,
+        sd.tags_json,
+        sd.hero_image_url,
+        sd.status,
+        sd.created_at,
+        sd.updated_at
       FROM contenu c
       LEFT JOIN service_detail sd ON sd.contenu_id = c.id
-      LEFT JOIN ContenuImage img   ON img.contenu_id = c.id
+      LEFT JOIN ContenuImage   img ON img.contenu_id   = c.id
       WHERE c.page_id = ?
         AND c.type    = 'service_list'
         AND c.slug    = ?
+        ${mustBePublished ? "AND COALESCE(sd.status, 'draft') = 'published'" : ""}
       LIMIT 1
     `,
-    [pid, String(slug)]
+    [pid, s]
   );
 
-  return rows?.[0] || null;
+  const row = rows?.[0] || null;
+  if (!row) return null;
+
+  const features = parseJSONMaybe(row.features_json, []);
+  const faq      = parseJSONMaybe(row.faq_json, []);
+  const tags     = parseJSONMaybe(row.tags_json, []);
+
+  const hero_image_url =
+    row.hero_image_url && String(row.hero_image_url).trim()
+      ? row.hero_image_url
+      : (row.image_url || null);
+
+  return {
+    contenu_id      : row.contenu_id,
+    page_id         : row.page_id,
+    titre           : row.titre,
+    slug            : row.slug,
+    description     : row.description ?? null,
+    date_publication: row.date_publication || null,
+
+    image_url       : row.image_url || null,
+    alt             : row.alt || (row.titre || "Service"),
+    icon_alt        : row.icon_alt || null,
+    hero_image_url,
+
+    excerpt         : row.excerpt ?? "",
+    body_md         : row.body_md ?? "",
+    features_json   : features,
+    faq_json        : faq,
+    tags_json       : tags,
+
+    status          : row.status || "draft",
+    created_at      : row.created_at || null,
+    updated_at      : row.updated_at || null,
+  };
 }
 
 /** Upsert des détails (1–1 sur contenu_id) — inchangé ici */

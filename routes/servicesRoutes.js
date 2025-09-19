@@ -5,7 +5,9 @@ import {
   handleUpdateService,
   handleDeleteService,
   fetchServicesByPage,
-  handleDuplicateService, // ✅ nouveau
+  handleDuplicateService,
+  handleGetServicesByTag,
+
 } from "../controllers/servicesController.js";
 
 const router = express.Router();
@@ -25,6 +27,7 @@ router.use((req, _res, next) => {
 });
 
 router.get("/services", fetchServicesByPage);
+router.get("/services/by-tag", handleGetServicesByTag);
 router.post("/services", handleCreateService);
 router.put("/services", handleUpdateService);
 router.delete("/services/:id", handleDeleteService);

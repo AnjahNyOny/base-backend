@@ -28,19 +28,35 @@ export const putServiceDetail = async (req, res) => {
 
 export async function handleGetServiceDetailBySlug(req, res) {
   try {
+    const slug = String(req.query.slug || "").trim();
     const page_id = Number(req.query.page_id);
-    const { slug } = req.query;
-    if (!Number.isFinite(page_id) || !slug) {
-      return res.status(400).json({ message: "page_id et slug requis" });
+    // preview facultatif: ?includeDraft=1 (ou ?preview=1)
+    const includeDraft =
+      String(req.query.includeDraft || req.query.preview || "") === "1";
+
+    if (!slug || !Number.isFinite(page_id)) {
+      return res.status(400).json({ message: "Paramètres 'slug' et 'page_id' requis." });
     }
-    const row = await getServiceDetailBySlug({ pageId: page_id, slug });
-    if (!row) return res.status(404).json({ message: "Introuvable" });
-    return res.json(row);
+
+    const detail = await getServiceDetailBySlug({
+      slug,
+      page_id,
+      mustBePublished: !includeDraft,
+    });
+
+    if (!detail) {
+      return res
+        .status(404)
+        .json({ message: includeDraft ? "Not found (even with preview)" : "Not found or not published" });
+    }
+
+    return res.json(detail);
   } catch (e) {
     console.error("[service-detail] by-slug error:", e);
     return res.status(500).json({ message: "Erreur serveur" });
   }
 }
+
 
 export const translateSlugController = async (req, res) => {
   try {
@@ -122,5 +138,26 @@ export const resolveSlug = async (req, res) => {
   } catch (e) {
     console.error("[resolve-slug] error:", e);
     return res.status(500).json({ message: "Erreur serveur" });
+  }
+};
+
+export const handleGetServicesByTag = async (req, res) => {
+  try {
+    const page_id = Number(req.query.page_id);
+    const tag = String(req.query.tag || "").trim();
+    const limit = Math.min(Number(req.query.limit || 12), 50);
+    const offset = Number(req.query.offset || 0);
+    const sort = (req.query.sort || "recent").toString();
+    const includeDraft = String(req.query.includeDraft || req.query.preview || "") === "1";
+
+    if (!Number.isFinite(page_id) || !tag) {
+      return res.status(400).json({ message: "Paramètres 'page_id' et 'tag' requis." });
+    }
+
+    const data = await listServicesByTag({ page_id, tag, limit, offset, sort, includeDraft });
+    return res.json(data);
+  } catch (error) {
+    console.error("[services] by-tag error:", error?.sqlMessage || error);
+    return res.status(error?.status || 500).json({ message: error?.message || "Erreur serveur" });
   }
 };

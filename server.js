@@ -12,6 +12,8 @@ import logger from "./services/logger.js";
 import http from "http";
 import { initRealtime } from "./services/realtime.js"; // si tu veux garder socket.io
 import { mountUploadImagesRoutes } from "./routes/upload-images.js";
+import sitemapRoutes from "./routes/sitemapRoutes.js";
+import robotRoutes from "./routes/robotsRoutes.js"
 
 
 import {
@@ -102,6 +104,8 @@ app.use((req, _res, next) => {
   }
   next();
 });
+app.use("/", sitemapRoutes);
+app.use("/", robotRoutes);
 app.use("/api", routes);
 
 

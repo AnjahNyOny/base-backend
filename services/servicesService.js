@@ -8,6 +8,18 @@ import { randomUUID } from "crypto";
    =========================================================== */
 
 /** Transforme un texte en slug URL-safe (accent-insensitive). */
+
+function parseJSONMaybe(v, fallback) {
+  if (v == null) return fallback;
+  try {
+    if (typeof v === "string") return JSON.parse(v);
+    if (Buffer.isBuffer(v))    return JSON.parse(v.toString("utf8"));
+    return v;
+  } catch {
+    return fallback;
+  }
+}
+
 function toSlug(s = "") {
   const str = String(s || "")
     .trim()
@@ -403,78 +415,163 @@ export async function duplicateServiceToPage({
  * - services[].alt         : alt de l’image (si existant)
  * - services[].icon_alt    : token icône "icon:fa-solid fa-…" (si existant)
  */
-export const getServicesWithDetails = async ({ pageId }) => {
-  const conn = await db.getConnection();
-  try {
-    const pid = Number(pageId);
-    if (!Number.isFinite(pid)) {
-      throw new Error("pageId requis (numérique).");
-    }
-
-    // Titre (service_title)
-    const [titleRows] = await conn.query(
-      `
-        SELECT id, type, titre, description, date_publication, page_id
-        FROM contenu
-        WHERE type = 'service_title' AND page_id = ?
-        ORDER BY id DESC
-        LIMIT 1
-      `,
-      [pid]
-    );
-    const serviceTitle = titleRows?.[0] || null;
-
-    // Items (service_list) — on expose aussi slug + service_key
-    const [serviceRows] = await conn.query(
-      `
-        SELECT id, type, titre, description, slug, service_key, date_publication, page_id
-        FROM contenu
-        WHERE type = 'service_list' AND page_id = ?
-        ORDER BY date_publication DESC, id DESC
-      `,
-      [pid]
-    );
-
-    // Images + Icônes (1 ligne ContenuImage par contenu_id)
-    let images = [];
-    const ids = (serviceRows || []).map(s => s.id);
-    if (ids.length > 0) {
-      const [imageRows] = await conn.query(
-        `
-          SELECT id, contenu_id, image_url, alt, icon_alt
-          FROM ContenuImage
-          WHERE contenu_id IN (?)
-        `,
-        [ids]
-      );
-      images = imageRows || [];
-    }
-
-    // Boutons (optionnels)
-    let boutons = [];
-    try {
-      const [btnRows] = await conn.query(
-        `SELECT * FROM ContenuBouton WHERE section = 'services' AND page_id = ?`,
-        [pid]
-      );
-      boutons = btnRows || [];
-    } catch {
-      boutons = [];
-    }
-
-    // Merge
-    const servicesWithImages = (serviceRows || []).map(svc => {
-      const img = images.find(i => i.contenu_id === svc.id);
-      return {
-        ...svc,
-        image_url: img?.image_url || null,
-        alt: img?.alt || null,            // alt de l'image uniquement
-        icon_alt: img?.icon_alt || null,  // token icône icon:fa-solid fa-...
-      };
-    });
-
-    return { serviceTitle, services: servicesWithImages, boutons };
-  } finally {
-    conn.release();
+export async function getServicesWithDetails({ pageId, includeDraft = false }) {
+  const pid = Number(pageId);
+  if (!Number.isFinite(pid)) {
+    const err = new Error("pageId invalide.");
+    err.status = 400; throw err;
   }
-};
+
+  // 1) Titre de section (tolérant: services_title ou service_title)
+  const [titleRows] = await db.query(
+    `
+      SELECT id, titre, description
+      FROM contenu
+      WHERE page_id = ?
+        AND type IN ('services_title','service_title')
+      ORDER BY id DESC
+      LIMIT 1
+    `,
+    [pid]
+  );
+  const serviceTitle = titleRows?.[0] || null;
+
+  // 2) Liste des cartes services
+  const statusWhere = includeDraft ? "" : "AND COALESCE(sd.status, 'draft') = 'published'";
+
+  const [rows] = await db.query(
+    `
+      SELECT
+        c.id,
+        c.titre,
+        c.description,
+        c.slug,
+        c.service_key,
+        c.date_publication,
+
+        img.image_url,
+        img.alt,
+        img.icon_alt,
+
+        sd.status,
+        sd.tags_json
+      FROM contenu c
+      LEFT JOIN service_detail sd ON sd.contenu_id = c.id
+      LEFT JOIN ContenuImage   img ON img.contenu_id   = c.id
+      WHERE c.page_id = ?
+        AND c.type = 'service_list'
+        ${statusWhere}
+      ORDER BY c.id DESC
+    `,
+    [pid]
+  );
+
+  const services = (rows || []).map(r => ({
+    id: r.id,
+    titre: r.titre,
+    description: r.description,
+    slug: r.slug,
+    service_key: r.service_key || null,
+    date_publication: r.date_publication || null,
+    image_url: r.image_url || null,
+    alt: r.alt || null,
+    icon_alt: r.icon_alt || null,
+    status: r.status || "draft",
+    tags: parseJSONMaybe(r.tags_json, []),
+  }));
+
+  // 3) Boutons (si tu en as — sinon, laisse vide)
+  const boutons = [];
+
+  return { serviceTitle, services, boutons };
+}
+
+
+/* ===========================================================
+   LIST BY TAG — liste les services ayant un tag précis
+   =========================================================== */
+/**
+ * Liste paginée des services pour un tag donné sur une page donnée.
+ * Params: { page_id, tag, limit=12, offset=0, sort='recent' }
+ * Retour: { items: [...], paging: { total, limit, offset } }
+ */
+export async function listServicesByTag({ page_id, tag, limit = 12, offset = 0, sort = "recent", includeDraft = false }) {
+  const pid = Number(page_id);
+  const t = String(tag || "").trim();
+  if (!Number.isFinite(pid) || !t) {
+    const err = new Error("page_id et tag requis.");
+    err.status = 400; throw err;
+  }
+  const lim = Math.max(1, Math.min(Number(limit) || 12, 50));
+  const off = Math.max(0, Number(offset) || 0);
+
+  const orderBy =
+    sort === "alpha"
+      ? "c.titre ASC, c.id DESC"
+      : "c.date_publication DESC, c.id DESC";
+
+  const statusWhere = includeDraft ? "" : "AND COALESCE(sd.status, 'draft') = 'published'";
+
+  const [rows] = await db.query(
+    `
+      SELECT
+        c.id,
+        c.titre,
+        c.slug,
+        c.description,
+        COALESCE(sd.excerpt, c.description) AS excerpt,
+        img.image_url,
+        img.alt,
+        img.icon_alt,
+        sd.tags_json,
+        c.date_publication
+      FROM contenu c
+      LEFT JOIN service_detail sd ON sd.contenu_id = c.id
+      LEFT JOIN ContenuImage   img ON img.contenu_id   = c.id
+      WHERE c.page_id = ?
+        AND c.type = 'service_list'
+        ${statusWhere}
+        AND JSON_CONTAINS(
+              COALESCE(NULLIF(sd.tags_json, ''), '[]'),
+              JSON_QUOTE(?),
+              '$'
+            )
+      ORDER BY ${orderBy}
+      LIMIT ? OFFSET ?
+    `,
+    [pid, t, lim, off]
+  );
+
+  const [countRows] = await db.query(
+    `
+      SELECT COUNT(*) AS total
+      FROM contenu c
+      LEFT JOIN service_detail sd ON sd.contenu_id = c.id
+      WHERE c.page_id = ?
+        AND c.type = 'service_list'
+        ${statusWhere}
+        AND JSON_CONTAINS(
+              COALESCE(NULLIF(sd.tags_json, ''), '[]'),
+              JSON_QUOTE(?),
+              '$'
+            )
+    `,
+    [pid, t]
+  );
+
+  const total = Number(countRows?.[0]?.total || 0);
+  const items = (rows || []).map(r => ({
+    id: r.id,
+    titre: r.titre,
+    slug: r.slug,
+    description: r.description,
+    excerpt: r.excerpt,
+    image_url: r.image_url || null,
+    alt: r.alt || null,
+    icon_alt: r.icon_alt || null,
+    tags: parseJSONMaybe(r.tags_json, []),
+    date_publication: r.date_publication,
+  }));
+
+  return { items, paging: { total, limit: lim, offset: off } };
+}

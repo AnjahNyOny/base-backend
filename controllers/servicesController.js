@@ -4,7 +4,8 @@ import {
   updateService,
   deleteService,
   getServicesWithDetails,
-  duplicateServiceToPage, // ✅ nouveau
+  duplicateServiceToPage, 
+  listServicesByTag
 } from "../services/servicesService.js";
 
 console.log("[CTRL] servicesController loaded ✅");
@@ -115,14 +116,16 @@ export const handleDeleteService = async (req, res) => {
 export const fetchServicesByPage = async (req, res) => {
   try {
     const pageId = Number(req.query.page_id);
+    const includeDraft = String(req.query.includeDraft || req.query.preview || "") === "1";
+
     if (!Number.isFinite(pageId)) {
       return res.status(400).json({ message: "Paramètre 'page_id' requis (numérique)." });
     }
 
-    const data = await getServicesWithDetails({ pageId });
+    const data = await getServicesWithDetails({ pageId, includeDraft });
     return res.json(data);
   } catch (error) {
-    console.error("[services] fetchServicesByPage error:", error);
+    console.error("[services] fetchServicesByPage error:", error?.sqlMessage || error);
     return res.status(500).json({ message: "Erreur serveur" });
   }
 };
@@ -159,6 +162,47 @@ export const handleDuplicateService = async (req, res) => {
     console.error("❌ Erreur duplication de service :", error);
     const status = error?.status || 500;
     return res.status(status).json({ message: error?.message || "Erreur lors de la duplication." });
+  }
+};
+
+/**
+ * GET /api/services/by-tag?tag=...&page_id=...&limit=12&offset=0&sort=recent|alpha
+ */
+export const handleGetServicesByTag = async (req, res) => {
+  try {
+    const page_id = Number(req.query.page_id);
+   const tag = String(req.query.tag || "").trim();
+   const sort = (req.query.sort || "recent").toString();
+
+   // Supporte page/pageSize ET limit/offset
+   const pageParam = Number(req.query.page || 1);
+   const pageSizeParam = Number(req.query.pageSize || req.query.limit || 12);
+   const limit = Math.min(Math.max(1, pageSizeParam || 12), 50);
+   // si "offset" est fourni explicitement on l’utilise, sinon on le dérive de page/pageSize
+   const offset = req.query.offset != null
+     ? Math.max(0, Number(req.query.offset) || 0)
+     : (Math.max(1, pageParam) - 1) * limit;
+
+    if (!Number.isFinite(page_id) || !tag) {
+      return res.status(400).json({ message: "Paramètres 'page_id' et 'tag' requis." });
+    }
+
+   const data = await listServicesByTag({ page_id, tag, limit, offset, sort });
+
+
+   // Réponse front-friendly
+   return res.json({
+     tag,
+     page_id,
+     total: data?.paging?.total ?? 0,
+     page:  data?.paging?.page  ?? (offset / limit + 1),
+     pageSize: data?.paging?.pageSize ?? limit,
+     items: data?.items || [],
+   });
+
+  } catch (error) {
+    console.error("[services] by-tag error:", error);
+    return res.status(error?.status || 500).json({ message: error?.message || "Erreur serveur" });
   }
 };
 
