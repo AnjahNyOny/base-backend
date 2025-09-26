@@ -575,3 +575,57 @@ export async function listServicesByTag({ page_id, tag, limit = 12, offset = 0, 
 
   return { items, paging: { total, limit: lim, offset: off } };
 }
+
+export async function upsertServiceTitle({ page_id, titre, description, date_publication = null }) {
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const pid = Number(page_id);
+    if (!Number.isFinite(pid)) {
+      const err = new Error("page_id invalide.");
+      err.status = 400; throw err;
+    }
+
+    const safeTitre = String(titre || "").trim() || "Nos Services";
+    const safeDesc  = String(description || "").trim();
+    const when      = date_publication ? new Date(date_publication) : new Date();
+    const dt        = formatDateForMySQL(when);
+
+    // cherche un titre existant (tolère 'services_title' et 'service_title')
+    const [rows] = await conn.query(
+      `
+        SELECT id FROM contenu
+        WHERE page_id = ?
+          AND type IN ('services_title','service_title')
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+      [pid]
+    );
+
+    let id;
+    if (rows?.length) {
+      id = rows[0].id;
+      await conn.query(
+        `UPDATE contenu SET titre = ?, description = ?, date_publication = ? WHERE id = ?`,
+        [safeTitre, safeDesc, dt, id]
+      );
+    } else {
+      const [ins] = await conn.query(
+        `INSERT INTO contenu (type, titre, description, date_publication, page_id)
+         VALUES ('service_title', ?, ?, ?, ?)`,
+        [safeTitre, safeDesc, dt, pid]
+      );
+      id = ins.insertId;
+    }
+
+    await conn.commit();
+    return { id, titre: safeTitre, description: safeDesc, page_id: pid };
+  } catch (e) {
+    try { await conn.rollback(); } catch {}
+    throw e;
+  } finally {
+    conn.release();
+  }
+}

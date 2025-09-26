@@ -5,7 +5,8 @@ import {
   deleteService,
   getServicesWithDetails,
   duplicateServiceToPage, 
-  listServicesByTag
+  listServicesByTag,
+  upsertServiceTitle
 } from "../services/servicesService.js";
 
 console.log("[CTRL] servicesController loaded ✅");
@@ -203,6 +204,21 @@ export const handleGetServicesByTag = async (req, res) => {
   } catch (error) {
     console.error("[services] by-tag error:", error);
     return res.status(error?.status || 500).json({ message: error?.message || "Erreur serveur" });
+  }
+};
+
+export const handleUpsertServiceTitle = async (req, res) => {
+  try {
+    const { page_id, titre, description, date_publication } = req.body || {};
+    const pid = Number(page_id);
+    if (!Number.isFinite(pid)) {
+      return res.status(400).json({ message: "page_id requis (numérique)." });
+    }
+    const out = await upsertServiceTitle({ page_id: pid, titre, description, date_publication });
+    return res.status(200).json(out);
+  } catch (error) {
+    console.error("❌ upsert servicesTitle:", error);
+    return res.status(error?.status || 500).json({ message: error?.message || "Erreur upsert servicesTitle." });
   }
 };
 
