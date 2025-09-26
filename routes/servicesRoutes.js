@@ -7,7 +7,7 @@ import {
   fetchServicesByPage,
   handleDuplicateService,
   handleGetServicesByTag,
-
+  handleUpsertServiceTitle,
 } from "../controllers/servicesController.js";
 
 const router = express.Router();
@@ -31,6 +31,10 @@ router.get("/services/by-tag", handleGetServicesByTag);
 router.post("/services", handleCreateService);
 router.put("/services", handleUpdateService);
 router.delete("/services/:id", handleDeleteService);
+
+// services title
+router.post("/services/title", handleUpsertServiceTitle);
+router.put("/services/title", handleUpsertServiceTitle); 
 
 // ✅ duplication inter-langue/page (conserve service_key)
 router.post("/services/:id/duplicate", handleDuplicateService);
