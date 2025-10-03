@@ -9,6 +9,8 @@ import footerRoutes from "./footerRoutes.js";
 import imagesRoutes from "./imagesRoutes.js";
 import buttonRoutes from "./buttonRoutes.js";
 
+import pageComponentRoutes from "./pageComponentRoutes.js";
+
 // Domain sections
 import companyOverviewRoutes from "./companyOverviewRoutes.js";
 import teamSectionRoutes from "./teamSectionRoutes.js";
@@ -52,6 +54,9 @@ router.use("/", pagesRoutes);
 router.use("/", contenuRoutes);
 router.use("/GlobalContent", globalContentRoutes);
 router.use("/", footerRoutes);
+
+router.use("/", pageComponentRoutes)
+
 
 /* ===== DOMAIN ===== */
 router.use("/", companyOverviewRoutes);
