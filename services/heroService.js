@@ -44,24 +44,24 @@ export async function getHeroByPageId(pageId) {
 
 /** PUT bulk — durci */
 export const updateHero = async (payloadRaw) => {
+  const conn = await db.getConnection();
   try {
-    // 🔧 Normalisation défensive
+    await conn.beginTransaction();
+
     const heroTitle = payloadRaw?.heroTitle || payloadRaw?.heroContent || null;
     const heroButtons = Array.isArray(payloadRaw?.heroButtons) ? payloadRaw.heroButtons : [];
-
     if (!heroTitle || !Number(heroTitle.id)) {
       throw new Error("Payload invalide: 'heroTitle.id' est requis.");
     }
 
     const titre = typeof heroTitle.titre === "string" ? heroTitle.titre : "";
     const description = typeof heroTitle.description === "string" ? heroTitle.description : "";
-
     const formattedDate = heroTitle?.date_publication
       ? formatDateForMySQL(heroTitle.date_publication)
       : formatDateForMySQL(new Date());
 
-    // 📝 Update du bloc titre/description
-    await db.query(
+    // 1) Update titre
+    await conn.query(
       `
         UPDATE contenu
         SET titre = ?, description = ?, date_publication = ?
@@ -70,29 +70,66 @@ export const updateHero = async (payloadRaw) => {
       [titre, description || null, formattedDate, heroTitle.id]
     );
 
-    // 📝 Update des boutons (table ContenuBouton = label/action uniquement)
+    // 2) Upsert boutons
+    //    On sécurise aussi par contenu_id pour éviter tout update croisé
     for (const btn of heroButtons) {
-      if (!btn || !Number(btn.id)) continue; // ignorer entrée invalide
-      const label = typeof btn.label === "string" ? btn.label : "";
-      const action = typeof btn.action === "string" ? btn.action : "#";
-      await db.query(
-        `
-          UPDATE ContenuBouton
-          SET label = ?, action = ?
-          WHERE id = ?;
-        `,
-        [label, action, btn.id]
-      );
+      const id = Number(btn?.id) || null;
+      const label = typeof btn?.label === "string" ? btn.label : "";
+      const action = (typeof btn?.action === "string" ? btn.action : "").trim();
+
+      if (id) {
+        // UPDATE si existe et appartient au bon contenu
+        await conn.query(
+          `
+            UPDATE \`ContenuBouton\`
+            SET \`label\` = ?, \`action\` = ?
+            WHERE \`id\` = ? AND \`contenu_id\` = ?;
+          `,
+          [label, action || null, id, heroTitle.id]
+        );
+      } else {
+        // INSERT si pas d'id
+        await conn.query(
+          `
+            INSERT INTO \`ContenuBouton\` (\`contenu_id\`, \`label\`, \`action\`)
+            VALUES (?, ?, ?);
+          `,
+          [heroTitle.id, label, action || null]
+        );
+      }
     }
+
+    // (Optionnel) Synchronisation stricte : supprimer les anciens non renvoyés
+    // const idsInPayload = new Set(heroButtons.map(b => Number(b?.id)).filter(Boolean));
+    // await conn.query(
+    //   `DELETE FROM \`ContenuBouton\` WHERE \`contenu_id\` = ? AND \`id\` NOT IN (${[...idsInPayload].join(',') || 0})`,
+    //   [heroTitle.id]
+    // );
+
+    // 3) Relecture des boutons “source de vérité”
+    const [rowsButtons] = await conn.query(
+      `
+        SELECT id, contenu_id, label, action
+        FROM \`ContenuBouton\`
+        WHERE \`contenu_id\` = ?
+        ORDER BY id ASC
+      `,
+      [heroTitle.id]
+    );
+
+    await conn.commit();
 
     return {
       message: "Section Hero mise à jour avec succès.",
-      updatedTitle: heroTitle,
-      updatedButtons: heroButtons,
+      updatedTitle: { id: heroTitle.id, titre, description },
+      buttons: rowsButtons || [],
     };
   } catch (error) {
-    console.error("[ERROR] updateHeroComponent:", error.message);
+    await conn.rollback();
+    console.error("[ERROR] updateHero:", error);
     throw error;
+  } finally {
+    conn.release();
   }
 };
 
