@@ -6,7 +6,8 @@ import {
   getServicesWithDetails,
   duplicateServiceToPage, 
   listServicesByTag,
-  upsertServiceTitle
+  upsertServiceTitle,
+  setServicePopularity,
 } from "../services/servicesService.js";
 
 console.log("[CTRL] servicesController loaded ✅");
@@ -19,7 +20,15 @@ console.log("[CTRL] servicesController loaded ✅");
  */
 export const handleCreateService = async (req, res) => {
   try {
-    const { titre, description, page_id, slug, service_key } = req.body || {};
+    const {
+      titre,
+      description,
+      page_id,
+      slug,
+      service_key,
+      is_popular = 0,
+      popular_rank = null,
+    } = req.body || {};
 
     const pid = Number(page_id);
     if (!Number.isFinite(pid)) {
@@ -35,6 +44,8 @@ export const handleCreateService = async (req, res) => {
       page_id: pid,
       slug: slug ? String(slug) : undefined,
       service_key: service_key ? String(service_key) : null,
+      is_popular: is_popular ? 1 : 0,
+      popular_rank: popular_rank != null && popular_rank !== "" ? Number(popular_rank) : null,
     });
 
     return res.status(201).json(newData);
@@ -43,6 +54,8 @@ export const handleCreateService = async (req, res) => {
     return res.status(500).json({ message: "Erreur lors de l'ajout." });
   }
 };
+
+
 
 /**
  * PUT /api/services
@@ -118,18 +131,24 @@ export const fetchServicesByPage = async (req, res) => {
   try {
     const pageId = Number(req.query.page_id);
     const includeDraft = String(req.query.includeDraft || req.query.preview || "") === "1";
+    const popularOnly  = Number(req.query.popularOnly) === 1;
+    const limitRaw     = parseInt(req.query.limit ?? 0, 10);
+    const limit        = Number.isFinite(limitRaw) ? Math.max(0, Math.min(limitRaw, 48)) : 0; // 0 = pas de limite
 
     if (!Number.isFinite(pageId)) {
       return res.status(400).json({ message: "Paramètre 'page_id' requis (numérique)." });
     }
 
-    const data = await getServicesWithDetails({ pageId, includeDraft });
+    const data = await getServicesWithDetails({ pageId, includeDraft, popularOnly, limit });
     return res.json(data);
   } catch (error) {
     console.error("[services] fetchServicesByPage error:", error?.sqlMessage || error);
     return res.status(500).json({ message: "Erreur serveur" });
   }
 };
+
+
+
 
 /**
  * POST /api/services/:id/duplicate
@@ -222,3 +241,25 @@ export const handleUpsertServiceTitle = async (req, res) => {
   }
 };
 
+export const handleSetServicePopularity = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ message: "Paramètre 'id' invalide." });
+    }
+
+    const { page_id = null, is_popular = undefined, popular_rank = undefined } = req.body || {};
+
+    const out = await setServicePopularity({
+      id,
+      page_id,
+      is_popular,
+      popular_rank
+    });
+
+    return res.status(200).json({ message: "OK", ...out });
+  } catch (error) {
+    console.error("❌ setServicePopularity:", error);
+    return res.status(error?.status || 500).json({ message: error?.message || "Erreur serveur" });
+  }
+};
