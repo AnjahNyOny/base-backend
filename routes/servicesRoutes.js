@@ -8,6 +8,7 @@ import {
   handleDuplicateService,
   handleGetServicesByTag,
   handleUpsertServiceTitle,
+  handleSetServicePopularity,
 } from "../controllers/servicesController.js";
 
 const router = express.Router();
@@ -35,6 +36,10 @@ router.delete("/services/:id", handleDeleteService);
 // services title
 router.post("/services/title", handleUpsertServiceTitle);
 router.put("/services/title", handleUpsertServiceTitle); 
+
+// popularity
+router.put("/services/:id/popularity", handleSetServicePopularity);
+
 
 // ✅ duplication inter-langue/page (conserve service_key)
 router.post("/services/:id/duplicate", handleDuplicateService);

@@ -151,23 +151,36 @@ export const updateService = async ({ servicesTitle, servicesList, page_id }) =>
         ? formatDateForMySQL(item.date_publication)
         : formatDateForMySQL(new Date());
 
-      // 1) MAJ titre/description/date
-      const [itemRes] = await conn.query(
-        `
-          UPDATE contenu
-          SET titre = ?, description = ?, date_publication = ?
-          WHERE id = ?
-            AND type = 'service_list'
-            AND page_id = ?;
-        `,
-        [
-          (item?.titre ?? "").trim(),
-          (item?.description ?? "").trim(),
-          itemDate,
-          item?.id,
-          pid,
-        ]
-      );
+      
+      // 1) MAJ titre/description/date + populaire (si fourni)
+const isPopular =
+  typeof item?.is_popular !== "undefined" ? (item.is_popular ? 1 : 0) : null;
+
+const rankVal =
+  item?.popular_rank != null && item.popular_rank !== ""
+    ? Math.max(0, Math.min(32767, Number(item.popular_rank) || 0))
+    : null;
+
+let sql = `
+  UPDATE contenu
+  SET titre = ?, description = ?, date_publication = ?
+      ${isPopular !== null ? ", is_popular = ?" : ""}
+      ${rankVal   !== null ? ", popular_rank = ?" : ""}
+  WHERE id = ?
+    AND type = 'service_list'
+    AND page_id = ?;
+`;
+
+const paramsUpd = [
+  (item?.titre ?? "").trim(),
+  (item?.description ?? "").trim(),
+  itemDate,
+];
+if (isPopular !== null) paramsUpd.push(isPopular);
+if (rankVal   !== null) paramsUpd.push(rankVal);
+paramsUpd.push(item?.id, pid);
+
+const [itemRes] = await conn.query(sql, paramsUpd);
 
       if (!itemRes.affectedRows) {
         throw Object.assign(
@@ -253,7 +266,15 @@ export const deleteService = async (id, page_id = null) => {
  *  - service_key (fourni ou généré), sans collision sur la *même page*
  *  - retourne l'objet créé
  */
-export async function createService({ titre, description, page_id, slug, service_key = null }) {
+export async function createService({
+  titre,
+  description,
+  page_id,
+  slug,
+  service_key = null,
+  is_popular = 0,
+  popular_rank = null,
+}) {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -270,19 +291,22 @@ export async function createService({ titre, description, page_id, slug, service
       throw Object.assign(new Error("Le titre est requis."), { status: 400 });
     }
 
-    // Slug désiré (slug fourni ou dérivé du titre)
-    const desired = toSlug(slug || safeTitre) || `service-${Date.now()}`;
+    const desired   = toSlug(slug || safeTitre) || `service-${Date.now()}`;
     const finalSlug = await ensureUniqueSlug(conn, pid, desired, null);
+    const finalKey  = await resolveServiceKeyForCreate(conn, pid, service_key);
 
-    // service_key (fourni ou généré) — éviter collision pour *cette page*
-    const finalServiceKey = await resolveServiceKeyForCreate(conn, pid, service_key);
+    const rankVal = popular_rank != null && popular_rank !== ""
+      ? Math.max(0, Math.min(32767, Number(popular_rank) || 0))
+      : null;
 
     const [result] = await conn.query(
       `
-        INSERT INTO contenu (type, titre, description, slug, service_key, date_publication, page_id)
-        VALUES ('service_list', ?, ?, ?, ?, ?, ?)
+        INSERT INTO contenu
+          (type, titre, description, slug, service_key, is_popular, popular_rank, date_publication, page_id)
+        VALUES
+          ('service_list', ?, ?, ?, ?, ?, ?, ?, ?)
       `,
-      [safeTitre, safeDesc, finalSlug, finalServiceKey, formattedDate, pid]
+      [safeTitre, safeDesc, finalSlug, finalKey, is_popular ? 1 : 0, rankVal, formattedDate, pid]
     );
 
     await conn.commit();
@@ -292,7 +316,9 @@ export async function createService({ titre, description, page_id, slug, service
       titre: safeTitre,
       description: safeDesc,
       slug: finalSlug,
-      service_key: finalServiceKey,
+      service_key: finalKey,
+      is_popular: !!is_popular,
+      popular_rank: rankVal,
       type: "service_list",
       date_publication: formattedDate,
       page_id: pid,
@@ -304,6 +330,7 @@ export async function createService({ titre, description, page_id, slug, service
     conn.release();
   }
 }
+
 
 /* ===========================================================
    DUPLICATE — vers une autre page/langue en conservant service_key
@@ -331,14 +358,15 @@ export async function duplicateServiceToPage({
 
     // Récupérer la source
     const [srcRows] = await conn.query(
-      `
-        SELECT c.id, c.page_id, c.titre, c.description, c.slug, c.service_key
-        FROM contenu c
-        WHERE c.id = ? AND c.type = 'service_list'
-        LIMIT 1
-      `,
-      [Number(source_id)]
-    );
+  `
+    SELECT c.id, c.page_id, c.titre, c.description, c.slug, c.service_key, c.is_popular, c.popular_rank
+    FROM contenu c
+    WHERE c.id = ? AND c.type = 'service_list'
+    LIMIT 1
+  `,
+  [Number(source_id)]
+);
+
     const src = srcRows?.[0];
     if (!src) {
       const err = new Error("Service source introuvable.");
@@ -368,12 +396,23 @@ export async function duplicateServiceToPage({
 
     const now = formatDateForMySQL(new Date());
     const [ins] = await conn.query(
-      `
-        INSERT INTO contenu (type, titre, description, slug, service_key, date_publication, page_id)
-        VALUES ('service_list', ?, ?, ?, ?, ?, ?)
-      `,
-      [titre, description, finalSlug, finalKey, now, tid]
-    );
+  `
+    INSERT INTO contenu
+      (type, titre, description, slug, service_key, is_popular, popular_rank, date_publication, page_id)
+    VALUES
+      ('service_list', ?, ?, ?, ?, ?, ?, ?, ?)
+  `,
+  [
+    titre,
+    description,
+    finalSlug,
+    finalKey,
+    src.is_popular ? 1 : 0,
+    src.popular_rank ?? null,
+    now,
+    tid
+  ]
+);
     const newId = ins.insertId;
 
     // Copier l'image liée si présente
@@ -415,14 +454,19 @@ export async function duplicateServiceToPage({
  * - services[].alt         : alt de l’image (si existant)
  * - services[].icon_alt    : token icône "icon:fa-solid fa-…" (si existant)
  */
-export async function getServicesWithDetails({ pageId, includeDraft = false }) {
+export async function getServicesWithDetails({
+  pageId,
+  includeDraft = false,
+  popularOnly = false,
+  limit = 0,
+}) {
   const pid = Number(pageId);
   if (!Number.isFinite(pid)) {
     const err = new Error("pageId invalide.");
     err.status = 400; throw err;
   }
 
-  // 1) Titre de section (tolérant: services_title ou service_title)
+  // 1) Titre de section
   const [titleRows] = await db.query(
     `
       SELECT id, titre, description
@@ -436,8 +480,16 @@ export async function getServicesWithDetails({ pageId, includeDraft = false }) {
   );
   const serviceTitle = titleRows?.[0] || null;
 
-  // 2) Liste des cartes services
-  const statusWhere = includeDraft ? "" : "AND COALESCE(sd.status, 'draft') = 'published'";
+  // 2) Liste services
+  const statusWhere  = includeDraft ? "" : "AND COALESCE(sd.status, 'draft') = 'published'";
+  const popularWhere = popularOnly ? "AND c.is_popular = 1" : "";
+  const orderBy      = popularOnly
+    ? "ORDER BY IFNULL(c.popular_rank, 9999) ASC, c.date_publication DESC, c.id DESC"
+    : "ORDER BY c.date_publication DESC, c.id DESC";
+  const limitSql     = limit > 0 ? "LIMIT ?" : "";
+
+  const params = [pid];
+  if (limit > 0) params.push(limit);
 
   const [rows] = await db.query(
     `
@@ -448,6 +500,8 @@ export async function getServicesWithDetails({ pageId, includeDraft = false }) {
         c.slug,
         c.service_key,
         c.date_publication,
+        c.is_popular,
+        c.popular_rank,
 
         img.image_url,
         img.alt,
@@ -461,9 +515,11 @@ export async function getServicesWithDetails({ pageId, includeDraft = false }) {
       WHERE c.page_id = ?
         AND c.type = 'service_list'
         ${statusWhere}
-      ORDER BY c.id DESC
+        ${popularWhere}
+      ${orderBy}
+      ${limitSql}
     `,
-    [pid]
+    params
   );
 
   const services = (rows || []).map(r => ({
@@ -478,13 +534,16 @@ export async function getServicesWithDetails({ pageId, includeDraft = false }) {
     icon_alt: r.icon_alt || null,
     status: r.status || "draft",
     tags: parseJSONMaybe(r.tags_json, []),
+    is_popular: !!r.is_popular,
+    popular_rank: r.popular_rank == null ? null : Number(r.popular_rank),
   }));
 
-  // 3) Boutons (si tu en as — sinon, laisse vide)
   const boutons = [];
 
   return { serviceTitle, services, boutons };
 }
+
+
 
 
 /* ===========================================================
@@ -628,4 +687,64 @@ export async function upsertServiceTitle({ page_id, titre, description, date_pub
   } finally {
     conn.release();
   }
+}
+
+export async function setServicePopularity({
+  id,
+  page_id = null,          // optionnel pour sécuriser par page
+  is_popular = undefined,  // undefined => ne pas toucher, true/1/false/0 => MAJ
+  popular_rank = undefined // undefined => ne pas toucher, null => SET NULL, number => SET value
+}) {
+  const sid = Number(id);
+  if (!Number.isFinite(sid)) {
+    const err = new Error("Paramètre 'id' invalide.");
+    err.status = 400; throw err;
+  }
+
+  const sets = [];
+  const params = [];
+
+  if (is_popular !== undefined) {
+    const next = (is_popular === true || is_popular === 1 || String(is_popular) === "1") ? 1 : 0;
+    sets.push("is_popular = ?");
+    params.push(next);
+  }
+  if (popular_rank !== undefined) {
+    // null explicite => on met NULL ; sinon clamp dans [0..32767]
+    const rankVal = (popular_rank === null)
+      ? null
+      : Math.max(0, Math.min(32767, Number(popular_rank) || 0));
+    sets.push("popular_rank = ?");
+    params.push(rankVal);
+  }
+
+  if (sets.length === 0) {
+    const err = new Error("Aucun champ à mettre à jour (is_popular / popular_rank).");
+    err.status = 400; throw err;
+  }
+
+  let sql = `
+    UPDATE contenu
+    SET ${sets.join(", ")}
+    WHERE id = ? AND type = 'service_list'
+  `;
+  params.push(sid);
+
+  if (page_id != null) {
+    const pid = Number(page_id);
+    if (!Number.isFinite(pid)) {
+      const err = new Error("Paramètre 'page_id' invalide.");
+      err.status = 400; throw err;
+    }
+    sql += ` AND page_id = ?`;
+    params.push(pid);
+  }
+
+  const [res] = await db.query(sql, params);
+  if (!res.affectedRows) {
+    const err = new Error("Aucun enregistrement mis à jour (id/page_id ne correspondent pas ?).");
+    err.status = 404; throw err;
+  }
+
+  return { id: sid, updated: sets.map(s => s.split("=")[0].trim()) };
 }
