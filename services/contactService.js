@@ -1261,15 +1261,14 @@ export async function replyToThread(
 
     await cnx.commit();
 
-    // 5. ENVOI VIA LE NOUVEAU SERVICE EMAIL (Template + Logo + Footer)
-    // sendAndPersistOutbox s'occupe de créer l'entrée dans 'email_outbox'
-    // et d'envoyer le mail via Nodemailer
+// 5. ENVOI VIA LE NOUVEAU SERVICE EMAIL (Template + Logo + Footer)
     const emailResult = await sendAndPersistOutbox({
-      inbox_id: null, // On pourrait lier à email_inbox si on unifiait les tables, mais ici c'est séparé
+      thread_id: id,      // CORRIGÉ: On passe 'thread_id' (c'est ce que ta DB attend)
+      // message_id: null, // Optionnel : tu pourrais passer l'ID inséré dans contact_messages juste avant si tu voulais lier
       to: t.user_email,
       subject: subj,
-      text: text,     // Version fallback texte brut
-      html: htmlBody  // Version HTML qui sera "habillée" par le template H&S
+      text: text,
+      html: htmlBody
     });
 
     return {

@@ -427,29 +427,28 @@
 
 // services/emailService.js
 import nodemailer from "nodemailer";
-import { htmlToText } from "html-to-text"; // Recommandé: npm install html-to-text
+import { htmlToText } from "html-to-text"; 
 import db from "../config/db.js";
 
 /* =========================
    CONSTANTES & CHARTE
    ========================= */
-
 const BRAND = {
   name: "H&S Conseil",
-  color: "#0F3F7A", // Bleu institutionnel (à adapter selon ta charte exacte)
-  accent: "#3B82F6", // Bleu clair pour les boutons/liens
-  bg: "#F3F4F6", // Gris très clair pour le fond
-  logoUrl: "https://babacode.ca/img/logo/hs-logo-email.png", // ⚠️ Mets ici une URL absolue vers ton logo
+  color: "#0F3F7A", 
+  accent: "#3B82F6", 
+  bg: "#F3F4F6", 
+  logoUrl: "https://babacode.ca/img/logo/hs-logo-email.png",
   website: "https://hsconseil.ca",
   address: "Québec, Canada"
 };
 
+const normalizeString = (s) => (s ?? "").toString().trim();
+const nowIso = () => new Date().toISOString().slice(0, 19).replace("T", " ");
+
 /* =========================
    CONFIGURATION SMTP
    ========================= */
-
-const normalizeString = (s) => (s ?? "").toString().trim();
-
 function getSmtpConfig() {
   const {
     SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS,
@@ -476,7 +475,6 @@ function getSmtpConfig() {
 }
 
 let _transport = null;
-
 function getTransport() {
   if (_transport) return _transport;
   const cfg = getSmtpConfig();
@@ -490,25 +488,14 @@ function getTransport() {
 }
 
 /* =========================
-   TEMPLATING (DESIGN PRO)
+   TEMPLATING
    ========================= */
-
-/**
- * Génère un email HTML responsive aux couleurs de l'entreprise.
- * @param {string} title - Titre principal (h1)
- * @param {string} contentHtml - Contenu (peut contenir des balises p, strong, ul...)
- * @param {string} [actionUrl] - (Optionnel) Lien pour un bouton d'action
- * @param {string} [actionText] - (Optionnel) Texte du bouton
- */
 function generateBrandedEmail(title, contentHtml, actionUrl = null, actionText = "Voir détails") {
   const buttonHtml = actionUrl
-    ? `
-      <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin: 20px 0;">
+    ? `<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin: 20px 0;">
         <tr>
           <td align="center" bgcolor="${BRAND.accent}" style="border-radius: 6px;">
-            <a href="${actionUrl}" style="background: ${BRAND.accent}; font-size: 16px; font-family: Helvetica, Arial, sans-serif; font-weight: bold; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 6px; display: inline-block; border: 1px solid ${BRAND.accent};">
-              ${actionText}
-            </a>
+            <a href="${actionUrl}" style="background: ${BRAND.accent}; font-size: 16px; font-family: Helvetica, Arial, sans-serif; font-weight: bold; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 6px; display: inline-block; border: 1px solid ${BRAND.accent};">${actionText}</a>
           </td>
         </tr>
       </table>`
@@ -537,18 +524,15 @@ function generateBrandedEmail(title, contentHtml, actionUrl = null, actionText =
         <div class="header">
           <img src="${BRAND.logoUrl}" alt="${BRAND.name}" style="max-height: 50px; width: auto; border: 0;">
         </div>
-        
         <div class="content">
           <h1>${title}</h1>
           ${contentHtml}
           ${buttonHtml}
-          
           <p style="margin-top: 30px; font-size: 14px; color: #6b7280; border-top: 1px solid #eee; padding-top: 20px;">
             Cordialement,<br>
             <strong>L'équipe ${BRAND.name}</strong>
           </p>
         </div>
-
         <div class="footer">
           <p>&copy; ${new Date().getFullYear()} ${BRAND.name}. Tous droits réservés.</p>
           <p>${BRAND.address} - <a href="${BRAND.website}">${BRAND.website}</a></p>
@@ -557,136 +541,49 @@ function generateBrandedEmail(title, contentHtml, actionUrl = null, actionText =
       </div>
     </div>
   </body>
-  </html>
-  `;
+  </html>`;
 }
 
 /* =========================
-   INBOX (Messages entrants)
-   ========================= */
-
-const nowIso = () => new Date().toISOString().slice(0, 19).replace("T", " ");
-
-/**
- * Enregistre un message contact depuis le site.
- */
-export async function queueUserMessage(payload) {
-  const nom = normalizeString(payload.nom);
-  const email = normalizeString(payload.email);
-  const sujet = normalizeString(payload.sujet) || "Contact depuis le site Web";
-  const message = normalizeString(payload.message);
-
-  if (!nom || !email || !message) throw new Error("Nom, email et message requis.");
-
-  const query = `
-    INSERT INTO email_inbox (nom, email, sujet, message, status, created_at)
-    VALUES (?, ?, ?, ?, 'new', ?)
-  `;
-  
-  const [res] = await db.query(query, [nom, email, sujet, message, nowIso()]);
-  
-  // Notification Admin (Optionnel : s'envoyer un mail à soi-même pour prévenir)
-  // sendAdminNotification(sujet, message); 
-  
-  return res.insertId;
-}
-
-/**
- * Récupère la liste des messages reçus (Pagination + Recherche).
- */
-export async function listInbox({ q, page = 1, pageSize = 20, status } = {}) {
-  const p = Math.max(1, Number(page));
-  const ps = Math.min(200, Math.max(1, Number(pageSize)));
-  const offset = (p - 1) * ps;
-
-  let query = "SELECT * FROM email_inbox WHERE 1=1";
-  const params = [];
-
-  if (status && status.trim()) {
-    query += " AND status = ?";
-    params.push(status.trim());
-  }
-
-  if (q && q.trim()) {
-    query += " AND (nom LIKE ? OR email LIKE ? OR sujet LIKE ?)";
-    const like = `%${q.trim()}%`;
-    params.push(like, like, like);
-  }
-
-  // Count total
-  const [countRes] = await db.query(query.replace("SELECT *", "SELECT COUNT(*) as total"), params);
-  const total = countRes[0]?.total || 0;
-
-  // Fetch rows
-  query += " ORDER BY created_at DESC LIMIT ? OFFSET ?";
-  params.push(ps, offset);
-  
-  const [rows] = await db.query(query, params);
-
-  return { items: rows, total, page: p, pageSize: ps };
-}
-
-/**
- * Lit un thread complet (Message reçu + Réponses).
- */
-export async function getThread(inboxId) {
-  const id = Number(inboxId);
-  if (!id) throw new Error("ID invalide");
-
-  const [[inbox]] = await db.query("SELECT * FROM email_inbox WHERE id = ?", [id]);
-  if (!inbox) return { inbox: null, replies: [] };
-
-  const [replies] = await db.query("SELECT * FROM email_outbox WHERE inbox_id = ? ORDER BY created_at ASC", [id]);
-  
-  return { inbox, replies };
-}
-
-export async function markInboxStatus(inboxId, status) {
-  const [res] = await db.query(
-    "UPDATE email_inbox SET status = ?, updated_at = ? WHERE id = ?",
-    [status || "read", nowIso(), inboxId]
-  );
-  return res.affectedRows > 0;
-}
-
-/* =========================
-   OUTBOX (Messages sortants)
+   OUTBOX (CORRIGÉ POUR TA BDD)
    ========================= */
 
 /**
  * Envoie un email et l'archive en base de données.
- * Utilise automatiquement le template HTML pro.
+ * ADAPTÉ: Utilise 'thread_id' au lieu de 'inbox_id'.
  */
 export async function sendAndPersistOutbox({
-  inbox_id = null,
+  thread_id = null,  // Remplacé inbox_id par thread_id
+  message_id = null, // Ajouté pour lier au message contact
   to,
   subject,
-  text,    // Version texte brut (fallback)
-  html,    // Contenu HTML principal (sera wrappé dans le template)
-  rawHtml = false // Si true, n'utilise pas le template de marque (pour newsletters custom par ex)
+  text,
+  html,
+  rawHtml = false
 }) {
   const connection = await db.getConnection();
   await connection.beginTransaction();
 
   try {
+    const config = getSmtpConfig();
+    const fromEmail = config.defaults.from.address; // Nécessaire pour ta table
+    
     // 1. Préparation du contenu PRO
     const finalHtml = rawHtml ? html : generateBrandedEmail(subject, html);
-    
-    // Génération automatique du texte brut si absent (pour antispam)
     const finalText = text || htmlToText(finalHtml, { wordwrap: 130 });
 
-    // 2. Insertion 'queued'
+    // 2. Insertion 'queued' -> ADAPTÉ À TON SCHÉMA
+    // On ajoute 'from_email' et on utilise 'thread_id'
     const [ins] = await connection.query(
       `INSERT INTO email_outbox 
-       (inbox_id, to_email, subject, body_text, body_html, status, created_at)
-       VALUES (?, ?, ?, ?, ?, 'queued', ?)`,
-      [inbox_id, normalizeString(to), subject, finalText, finalHtml, nowIso()]
+       (thread_id, message_id, to_email, from_email, subject, body_text, body_html, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+      [thread_id, message_id, normalizeString(to), fromEmail, subject, finalText, finalHtml, nowIso()]
     );
     const outboxId = ins.insertId;
 
     // 3. Envoi réel
     const transporter = getTransport();
-    const config = getSmtpConfig();
     let status = "failed";
     let providerId = null;
     let errorMsg = null;
@@ -714,12 +611,10 @@ export async function sendAndPersistOutbox({
       [status, providerId, errorMsg, nowIso(), outboxId]
     );
 
-    // 5. Si réponse à un thread, on marque le thread comme traité
-    if (status === "sent" && inbox_id) {
-      await connection.query(
-        "UPDATE email_inbox SET status = 'handled', updated_at = ? WHERE id = ?", 
-        [nowIso(), inbox_id]
-      );
+    // 5. Mise à jour du statut du thread (si lié)
+    if (status === "sent" && thread_id) {
+       // Optionnel : mettre à jour le statut du thread ici si nécessaire
+       // Mais c'est souvent déjà fait par le contrôleur
     }
 
     await connection.commit();
@@ -734,27 +629,7 @@ export async function sendAndPersistOutbox({
 }
 
 /**
- * Raccourci pour répondre à un message de l'Inbox.
- */
-export async function replyToInbox({ inboxId, subject, message }) {
-  const [[inbox]] = await db.query("SELECT email, nom FROM email_inbox WHERE id = ?", [inboxId]);
-  if (!inbox) throw new Error("Message introuvable");
-
-  // On transforme les sauts de ligne en <br> pour le HTML
-  const messageHtml = `<p>Bonjour ${inbox.nom || ""},</p>` + 
-                      message.split('\n').map(line => `<p>${line}</p>`).join("");
-
-  return sendAndPersistOutbox({
-    inbox_id: inboxId,
-    to: inbox.email,
-    subject: subject || `Re: Votre demande H&S Conseil`,
-    text: message, // Sera auto-généré si omis, mais on le passe par sécurité
-    html: messageHtml
-  });
-}
-
-/**
- * Envoi simple (Notifications système, sans persistance outbox)
+ * Envoi simple (Notifications système)
  */
 export async function sendSystemMail({ to, subject, html }) {
   const transporter = getTransport();
@@ -772,47 +647,5 @@ export async function sendSystemMail({ to, subject, html }) {
   });
 }
 
-/* =========================
-   LISTING OUTBOX & ADMIN
-   ========================= */
-
-export async function listOutbox({ q, page = 1, pageSize = 20 } = {}) {
-  const p = Math.max(1, Number(page));
-  const ps = Math.min(200, Math.max(1, Number(pageSize)));
-  const offset = (p - 1) * ps;
-  
-  let query = "SELECT * FROM email_outbox WHERE 1=1";
-  const params = [];
-
-  if (q && q.trim()) {
-    query += " AND (to_email LIKE ? OR subject LIKE ?)";
-    const like = `%${q.trim()}%`;
-    params.push(like, like);
-  }
-
-  // Count
-  const [c] = await db.query(query.replace("SELECT *", "SELECT COUNT(*) as total"), params);
-  
-  // Fetch
-  query += " ORDER BY created_at DESC LIMIT ? OFFSET ?";
-  params.push(ps, offset);
-  const [rows] = await db.query(query, params);
-
-  return { items: rows, total: c[0]?.total || 0, page: p, pageSize: ps };
-}
-
-export async function deleteThread(inboxId) {
-  const cnx = await db.getConnection();
-  try {
-    await cnx.beginTransaction();
-    await cnx.query("DELETE FROM email_outbox WHERE inbox_id = ?", [inboxId]);
-    await cnx.query("DELETE FROM email_inbox WHERE id = ?", [inboxId]);
-    await cnx.commit();
-    return true;
-  } catch (e) {
-    await cnx.rollback();
-    throw e;
-  } finally {
-    cnx.release();
-  }
-}
+// Note: J'ai retiré les fonctions inbox/replyToInbox qui utilisaient l'ancienne logique inbox_id
+// car ton contactService gère ça via les threads.
