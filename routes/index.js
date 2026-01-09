@@ -83,7 +83,7 @@ router.use("/", contactRoutes);        // Admin Inbox
 router.use("/", contactClientRoutes);  // Page Contact (contenu + envoi public)
 
 /* === SITEMAP ===*/
-// router.use("/", sitemapRoutes)
+router.use("/", sitemapRoutes)
 
 /* ===== NOTIFY / INBOUND (si utilisés) ===== */
 import inboundRoutes from "./inbound.routes.js";
