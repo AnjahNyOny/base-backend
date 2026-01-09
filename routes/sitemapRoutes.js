@@ -8,7 +8,6 @@ const router = express.Router();
    Utils
 -----------------------------------------*/
 
-/** Échappe les caractères XML */
 function xmlEscape(s = "") {
   return String(s)
     .replace(/&/g, "&amp;")
@@ -18,7 +17,6 @@ function xmlEscape(s = "") {
     .replace(/>/g, "&gt;");
 }
 
-/** Format ISO court (YYYY-MM-DD) pour <lastmod> */
 function toISODate(d) {
   try {
     const dt = new Date(d);
@@ -29,7 +27,6 @@ function toISODate(d) {
   }
 }
 
-/** Base URL fiable (respect X-Forwarded-* en prod) */
 function getBaseUrl(req) {
   const env = process.env.PUBLIC_BASE_URL && process.env.PUBLIC_BASE_URL.trim();
   if (env) return env.replace(/\/+$/, "");
@@ -53,39 +50,21 @@ async function getHomePageIds() {
     );
     const map = {};
     for (const r of rows || []) map[r.lang] = r.page_id;
-    if (map.fr || map.en) return { fr: map.fr || null, en: map.en || null };
+    return { fr: map.fr || null, en: map.en || null };
   } catch (e) {
-    console.error("[sitemap] getHomePageIds (code=home) error:", e?.message || e);
-  }
-
-  try {
-    const [rows2] = await db.query(
-      `SELECT p.id AS page_id, s.langue_active AS lang
-         FROM page p
-         JOIN site s ON s.id = p.site_id
-        WHERE s.langue_active IN ('fr','en')
-          AND (
-            (s.langue_active='fr' AND p.slug IN ('accueil','home'))
-            OR
-            (s.langue_active='en' AND p.slug IN ('home','accueil'))
-          )`
-    );
-    const map2 = {};
-    for (const r of rows2 || []) map2[r.lang] = r.page_id;
-    return { fr: map2.fr || null, en: map2.en || null };
-  } catch (e2) {
-    console.error("[sitemap] getHomePageIds (fallback slug) error:", e2?.message || e2);
     return { fr: null, en: null };
   }
 }
 
+/** * CORRECTION SQL : Utilisation de date_publication car updated_at n'existe pas 
+ */
 async function getServicesForPage(pageId) {
   if (!pageId) return [];
   const [rows] = await db.query(
     `
       SELECT
         c.slug,
-        COALESCE(sd.updated_at, c.updated_at, c.created_at, NOW()) AS lastmod,
+        COALESCE(c.date_publication, NOW()) AS lastmod,
         sd.tags_json
       FROM contenu c
       LEFT JOIN service_detail sd ON sd.contenu_id = c.id
@@ -97,10 +76,6 @@ async function getServicesForPage(pageId) {
   );
   return rows || [];
 }
-
-/* ----------------------------------------
-   XML builders
------------------------------------------*/
 
 function urlTag({ loc, lastmod, changefreq = "weekly", priority = "0.7" }) {
   const lm = lastmod ? `\n    <lastmod>${xmlEscape(lastmod)}</lastmod>` : "";
@@ -119,7 +94,6 @@ function urlTag({ loc, lastmod, changefreq = "weekly", priority = "0.7" }) {
 
 router.get("/sitemap.xml", async (req, res) => {
   const base = getBaseUrl(req);
-
   const urls = [
     { loc: `${base}/fr`, changefreq: "daily", priority: "1.0" },
     { loc: `${base}/en`, changefreq: "daily", priority: "1.0" },
@@ -139,61 +113,47 @@ router.get("/sitemap.xml", async (req, res) => {
     ]);
 
     for (const r of frServices || []) {
-      const lastmod = toISODate(r.lastmod);
       urls.push({
         loc: `${base}/fr/services/${encodeURIComponent(r.slug)}`,
-        lastmod,
+        lastmod: toISODate(r.lastmod),
         changefreq: "weekly",
         priority: "0.8",
       });
     }
-
     for (const r of enServices || []) {
-      const lastmod = toISODate(r.lastmod);
       urls.push({
         loc: `${base}/en/services/${encodeURIComponent(r.slug)}`,
-        lastmod,
+        lastmod: toISODate(r.lastmod),
         changefreq: "weekly",
         priority: "0.8",
       });
     }
 
-    const tagSetFR = new Set();
-    for (const r of frServices || []) {
-      if (!r?.tags_json) continue;
-      try {
-        const arr = JSON.parse(r.tags_json);
-        if (Array.isArray(arr)) arr.forEach((t) => t && tagSetFR.add(String(t)));
-      } catch {}
-    }
-    for (const tag of tagSetFR) {
-      urls.push({
-        loc: `${base}/fr/services/tag/${encodeURIComponent(tag)}`,
-        changefreq: "weekly",
-        priority: "0.6",
+    const processTags = (services, lang) => {
+      const set = new Set();
+      services.forEach(r => {
+        if (r.tags_json) {
+          try {
+            JSON.parse(r.tags_json).forEach(t => t && set.add(String(t)));
+          } catch {}
+        }
       });
-    }
+      set.forEach(tag => {
+        urls.push({
+          loc: `${base}/${lang}/services/tag/${encodeURIComponent(tag)}`,
+          changefreq: "weekly",
+          priority: "0.6"
+        });
+      });
+    };
+    processTags(frServices, 'fr');
+    processTags(enServices, 'en');
 
-    const tagSetEN = new Set();
-    for (const r of enServices || []) {
-      if (!r?.tags_json) continue;
-      try {
-        const arr = JSON.parse(r.tags_json);
-        if (Array.isArray(arr)) arr.forEach((t) => t && tagSetEN.add(String(t)));
-      } catch {}
-    }
-    for (const tag of tagSetEN) {
-      urls.push({
-        loc: `${base}/en/services/tag/${encodeURIComponent(tag)}`,
-        changefreq: "weekly",
-        priority: "0.6",
-      });
-    }
   } catch (err) {
-    console.error("[sitemap] dynamic section error:", err?.message || err);
+    console.error("[sitemap] SQL Error:", err.message);
   }
 
-  // --- XML final corrigé (<?xml sur la ligne 1, colonne 1) ---
+  // XML final sur la ligne 1
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${urls.map(urlTag).join("\n")}
