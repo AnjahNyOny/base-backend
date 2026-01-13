@@ -530,13 +530,12 @@ function generateBrandedEmail(title, contentHtml, actionUrl = null, actionText =
           ${buttonHtml}
           <p style="margin-top: 30px; font-size: 14px; color: #6b7280; border-top: 1px solid #eee; padding-top: 20px;">
             Cordialement,<br>
-            <strong>L'équipe ${BRAND.name}</strong>
+            <strong>${BRAND.name}</strong>
           </p>
         </div>
         <div class="footer">
           <p>&copy; ${new Date().getFullYear()} ${BRAND.name}. Tous droits réservés.</p>
           <p>${BRAND.address} - <a href="${BRAND.website}">${BRAND.website}</a></p>
-          <p>Ceci est un message automatique, merci de ne pas y répondre directement.</p>
         </div>
       </div>
     </div>
