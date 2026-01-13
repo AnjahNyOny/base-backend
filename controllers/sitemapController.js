@@ -46,7 +46,7 @@ async function getServicesGroupedByKey({ frPageId, enPageId }) {
       c.page_id,
       c.slug,
       c.titre,
-      c.updated_at AS c_updated,
+      c.date_publication AS c_updated,
       sd.updated_at AS sd_updated
     FROM contenu c
     LEFT JOIN service_detail sd ON sd.contenu_id = c.id
