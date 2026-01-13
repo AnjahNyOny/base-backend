@@ -427,19 +427,19 @@
 
 // services/emailService.js
 import nodemailer from "nodemailer";
-import { htmlToText } from "html-to-text"; 
+import { htmlToText } from "html-to-text";
 import db from "../config/db.js";
 
 /* =========================
    CONSTANTES & CHARTE
    ========================= */
 const BRAND = {
-  name: "H&S Conseil",
-  color: "#0F3F7A", 
-  accent: "#3B82F6", 
-  bg: "#F3F4F6", 
-  logoUrl: "https://babacode.ca/img/logo/hs-logo-email.png",
-  website: "https://hsconseil.ca",
+  name: "Anjah Rakotovao",
+  color: "#0F3F7A",
+  accent: "#3B82F6",
+  bg: "#F3F4F6",
+  logoUrl: "https://babacode.ca/img/logo/ar.svg",
+  website: "https://babacode.ca",
   address: "Québec, Canada"
 };
 
@@ -567,7 +567,7 @@ export async function sendAndPersistOutbox({
   try {
     const config = getSmtpConfig();
     const fromEmail = config.defaults.from.address; // Nécessaire pour ta table
-    
+
     // 1. Préparation du contenu PRO
     const finalHtml = rawHtml ? html : generateBrandedEmail(subject, html);
     const finalText = text || htmlToText(finalHtml, { wordwrap: 130 });
@@ -613,8 +613,8 @@ export async function sendAndPersistOutbox({
 
     // 5. Mise à jour du statut du thread (si lié)
     if (status === "sent" && thread_id) {
-       // Optionnel : mettre à jour le statut du thread ici si nécessaire
-       // Mais c'est souvent déjà fait par le contrôleur
+      // Optionnel : mettre à jour le statut du thread ici si nécessaire
+      // Mais c'est souvent déjà fait par le contrôleur
     }
 
     await connection.commit();
@@ -634,7 +634,7 @@ export async function sendAndPersistOutbox({
 export async function sendSystemMail({ to, subject, html }) {
   const transporter = getTransport();
   const config = getSmtpConfig();
-  
+
   const finalHtml = generateBrandedEmail(subject, html);
   const text = htmlToText(finalHtml);
 
