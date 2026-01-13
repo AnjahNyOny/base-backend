@@ -24,7 +24,7 @@
 //       console.log("Tentative d'envoi d'un e-mail à :", to);
 //       console.log("Sujet :", subject);
 //       const info = await transporter.sendMail({
-//         from: '"H&S Conseil" <trfalgardwaterlawtdl@gmail.com>',
+//         from: '"Anjah R." <trfalgardwaterlawtdl@gmail.com>',
 //         to,
 //         subject,
 //         text,
@@ -78,7 +78,7 @@
 //     },
 //     defaults: {
 //       from: {
-//         name: SMTP_FROM_NAME || "H&S Conseil",
+//         name: SMTP_FROM_NAME || "Anjah R.",
 //         address: SMTP_FROM_EMAIL,
 //       },
 //     },
@@ -300,7 +300,7 @@
 //   return sendAndPersistOutbox({
 //     inbox_id: id,
 //     to: inbox.email,
-//     subject: normalizeString(subject) || "Réponse H&S Conseil",
+//     subject: normalizeString(subject) || "Réponse Anjah R.",
 //     text: normalizeString(message),
 //     html: html || null,
 //   });
@@ -403,7 +403,7 @@
 //   const transporter = getTransport();
 
 //   const fromObj = from || cfg.defaults?.from || {
-//     name: "H&S Conseil",
+//     name: "Anjah R.",
 //     address: process.env.SMTP_FROM_EMAIL,
 //   };
 

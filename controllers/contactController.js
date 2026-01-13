@@ -428,12 +428,12 @@ export const postInboundController = async (req, res) => {
       const mailHtml = `
         <p>Bonjour,</p>
         <p>Merci pour votre message. Nous revenons vers vous très vite.</p>
-        <p>Cordialement,<br>H&S Conseil</p>
+        <p>Cordialement,<br>Anjah R.</p>
       `;
 
       await sendSystemMail({
         to: parsed.data.email,
-        subject: "Accusé de réception - H&S Conseil",
+        subject: "Accusé de réception - Anjah R.",
         html: mailHtml // Sera injecté dans le template visuel
       });
 

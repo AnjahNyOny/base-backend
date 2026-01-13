@@ -3,7 +3,7 @@
 // import { buildTransporter } from "../utils/email.js";
 
 // const FROM_EMAIL = process.env.SMTP_FROM_EMAIL || "no-reply@example.com";
-// const FROM_NAME  = process.env.SMTP_FROM_NAME  || "H&S Conseil";
+// const FROM_NAME  = process.env.SMTP_FROM_NAME  || "Anjah R.";
 
 // /* Envoi immédiat via Nodemailer */
 // export async function sendRawMail({ to, subject, text, html, fromEmail = FROM_EMAIL, fromName = FROM_NAME, headers = {} }) {

@@ -549,12 +549,12 @@
 //   const id = Number(threadId);
 //   if (!Number.isFinite(id)) throw new Error("threadId invalide.");
 
-//   const subj = (subject ?? "").toString().trim() || "Réponse H&S Conseil";
+//   const subj = (subject ?? "").toString().trim() || "Réponse Anjah R.";
 //   const text = (message ?? "").toString().trim();
 //   if (!text) throw new Error("Le corps du message est requis.");
 
 //   const fromEmail = (process.env.SMTP_FROM_EMAIL || process.env.EMAIL_USER || "").trim();
-//   const fromName = (process.env.SMTP_FROM_NAME || "H&S Conseil").trim();
+//   const fromName = (process.env.SMTP_FROM_NAME || "Anjah R.").trim();
 
 //   const adminName = (sender_name ?? "").toString().trim() || fromName;
 //   const adminEmail = (sender_email ?? "").toString().trim() || fromEmail;
@@ -1207,12 +1207,12 @@ export async function replyToThread(
   const id = Number(threadId);
   if (!Number.isFinite(id)) throw new Error("threadId invalide.");
 
-  const subj = (subject ?? "").toString().trim() || "Réponse H&S Conseil";
+  const subj = (subject ?? "").toString().trim() || "Réponse Anjah R.";
   const text = (message ?? "").toString().trim();
   if (!text) throw new Error("Le corps du message est requis.");
 
   const fromEmail = (process.env.SMTP_FROM_EMAIL || process.env.EMAIL_USER || "").trim();
-  const fromName = (process.env.SMTP_FROM_NAME || "H&S Conseil").trim();
+  const fromName = (process.env.SMTP_FROM_NAME || "Anjah R.").trim();
 
   const adminName = (sender_name ?? "").toString().trim() || fromName;
   const adminEmail = (sender_email ?? "").toString().trim() || fromEmail;
@@ -1261,7 +1261,7 @@ export async function replyToThread(
 
     await cnx.commit();
 
-// 5. ENVOI VIA LE NOUVEAU SERVICE EMAIL (Template + Logo + Footer)
+    // 5. ENVOI VIA LE NOUVEAU SERVICE EMAIL (Template + Logo + Footer)
     const emailResult = await sendAndPersistOutbox({
       thread_id: id,      // CORRIGÉ: On passe 'thread_id' (c'est ce que ta DB attend)
       // message_id: null, // Optionnel : tu pourrais passer l'ID inséré dans contact_messages juste avant si tu voulais lier
