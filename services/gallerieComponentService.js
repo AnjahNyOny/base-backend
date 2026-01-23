@@ -145,20 +145,35 @@ export const updateGallerieComponent = async ({ galleryTitle, galleryList }) => 
   }
 };
 
-/** DELETE: supprimer un item + ses images */
+/** DELETE: supprimer un item + ses images partout */
 export const deleteGallerieComponent = async (id) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
 
-    await conn.query(`DELETE FROM contenuimage WHERE contenu_id = ?`, [id]);
-    await conn.query(`DELETE FROM contenu WHERE id = ? AND type = ?`, [id, GALLERIE_ITEM]);
+    // 1. Supprimer les IMAGES liées (Table enfant 1)
+    // Utilisez la casse exacte de votre table, souvent "ContenuImage" ou "contenuimage"
+    await conn.query(`DELETE FROM ContenuImage WHERE contenu_id = ?`, [id]);
+
+    // 2. Supprimer les BOUTONS liés (Table enfant 2) - C'EST LA LIGNE QUI MANQUAIT
+    // C'est elle qui causait l'erreur "foreign key constraint fails (`h&s`.`contenubouton`...)"
+    await conn.query(`DELETE FROM ContenuBouton WHERE contenu_id = ?`, [id]);
+
+    // 3. Supprimer le CONTENU parent (Table parente)
+    const [res] = await conn.query(
+      `DELETE FROM Contenu WHERE id = ? AND type = ?`,
+      [id, GALLERIE_ITEM]
+    );
+
+    if (res.affectedRows === 0) {
+      // Optionnel : Gérer le cas où l'item n'existait pas
+    }
 
     await conn.commit();
     return { message: "Élément de galerie supprimé avec succès." };
   } catch (err) {
     await conn.rollback();
-    console.error("[ERROR] deleteGallerieComponent:", err?.message || err);
+    console.error("[ERROR SQL] deleteGallerieComponent:", err.sqlMessage || err.message);
     throw err;
   } finally {
     conn.release();
