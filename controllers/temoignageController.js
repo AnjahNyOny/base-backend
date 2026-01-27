@@ -28,10 +28,21 @@ export const getTemoignagesApprouvesController = async (_req, res) => {
 export const postTemoignageController = async (req, res) => {
   try {
     const { nom, email, message } = req.body || {};
-    if (!nom?.trim() || !email?.trim() || !message?.trim()) {
-      return res.status(400).json({ error: "Nom, email, message requis." });
+    
+    // On ne vérifie que le nom et le message. L'email sort du "if".
+    if (!nom?.trim() || !message?.trim()) {
+      return res.status(400).json({ error: "Le nom et le message sont requis." });
     }
-    const id = await createTemoignage({ nom, email, message });
+    
+    // On nettoie l'email s'il existe, sinon on met null
+    const emailData = email?.trim() || null;
+
+    const id = await createTemoignage({ 
+      nom: nom.trim(), 
+      email: emailData, 
+      message: message.trim() 
+    });
+    
     res.status(201).json({ success: true, id });
   } catch (e) {
     console.error(e);
@@ -61,10 +72,18 @@ export const putTemoignageController = async (req, res) => {
   try {
     const id = req.params.id;
     const { nom = "", email = "", message = "" } = req.body || {};
-    if (!String(nom).trim() || !String(email).trim() || !String(message).trim()) {
-      return res.status(400).json({ error: "Champs requis manquants." });
+    
+    // Retrait de !String(email).trim()
+    if (!String(nom).trim() || !String(message).trim()) {
+      return res.status(400).json({ error: "Champs requis manquants (nom/message)." });
     }
-    const ok = await updateTemoignage(id, { nom, email, message });
+    
+    const ok = await updateTemoignage(id, { 
+      nom: nom.trim(), 
+      email: email?.trim() || null, 
+      message: message.trim() 
+    });
+    
     if (!ok) return res.status(404).json({ error: "Non trouvé" });
     res.json({ success: true });
   } catch (e) {

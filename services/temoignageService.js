@@ -25,7 +25,7 @@ export const createTemoignage = async ({ nom, email, message }) => {
   const [res] = await db.query(
     `INSERT INTO temoignages (nom, email, message, est_approuve, created_at)
      VALUES (?, ?, ?, 0, NOW())`,
-    [nom, email, message]
+    [nom, email || null, message]
   );
   return res.insertId;
 };
@@ -108,7 +108,7 @@ export const searchTemoignages = async ({
 export const updateTemoignage = async (id, { nom, email, message }) => {
   const [res] = await db.query(
     `UPDATE temoignages SET nom = ?, email = ?, message = ? WHERE id = ?`,
-    [nom, email, message, id]
+    [nom, email || null, message, id] // Ajout de || null ici
   );
   return res.affectedRows > 0;
 };
